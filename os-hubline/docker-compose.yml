@@ -1,0 +1,131 @@
+version: "3.9"
+
+services:
+  # ── Backend API ──────────────────────────────────────
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: hubline-api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://hubline:hubline@postgres:5432/hubline
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - ENVIRONMENT=development
+      - DEBUG=true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+
+  # ── Celery Worker ────────────────────────────────────
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: hubline-worker
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://hubline:hubline@postgres:5432/hubline
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    depends_on:
+      - api
+      - redis
+    volumes:
+      - ./backend:/app
+    command: celery -A app.tasks.celery_tasks worker -l info -c 4
+    restart: unless-stopped
+
+  # ── Celery Beat (scheduler) ──────────────────────────
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: hubline-beat
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    depends_on:
+      - redis
+    volumes:
+      - ./backend:/app
+    command: celery -A app.tasks.celery_tasks beat -l info
+    restart: unless-stopped
+
+  # ── PostgreSQL ───────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: hubline-db
+    environment:
+      POSTGRES_USER: hubline
+      POSTGRES_PASSWORD: hubline
+      POSTGRES_DB: hubline
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hubline"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Redis ────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: hubline-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── SQL Server (optionnel — décommenter si besoin) ──
+  # sqlserver:
+  #   image: mcr.microsoft.com/mssql/server:2022-latest
+  #   container_name: hubline-sqlserver
+  #   environment:
+  #     ACCEPT_EULA: "Y"
+  #     MSSQL_SA_PASSWORD: "YourStrong!Passw0rd"
+  #   ports:
+  #     - "1433:1433"
+  #   volumes:
+  #     - sqlserver_data:/var/opt/mssql
+  #   restart: unless-stopped
+
+  # ── MySQL (optionnel — décommenter si besoin) ───────
+  # mysql:
+  #   image: mysql:8.0
+  #   container_name: hubline-mysql
+  #   environment:
+  #     MYSQL_ROOT_PASSWORD: hubline
+  #     MYSQL_DATABASE: hubline
+  #     MYSQL_USER: hubline
+  #     MYSQL_PASSWORD: hubline
+  #   ports:
+  #     - "3306:3306"
+  #   volumes:
+  #     - mysql_data:/var/lib/mysql
+  #   command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+  #   restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  # sqlserver_data:
+  # mysql_data:
