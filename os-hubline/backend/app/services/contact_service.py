@@ -5,6 +5,7 @@ Utilise les query helpers portables pour être compatible avec
 tous les moteurs SQL (PostgreSQL, SQL Server, MySQL, SQLite, Oracle).
 """
 import uuid
+from typing import List
 from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy import select, func, or_, and_
@@ -57,7 +58,7 @@ class ContactService:
         segment: Optional[str] = None,
         country: Optional[str] = None,
         business_unit: Optional[str] = None,
-        tags: Optional[list[str]] = None,
+        tags: Optional[List[str]] = None,
         sort_by: str = "created_at",
         sort_order: str = "desc",
     ) -> ContactListResponse:
@@ -151,7 +152,7 @@ class ContactService:
         await self.db.flush()
         return True
 
-    async def bulk_import(self, contacts_data: list[ContactCreate]) -> dict:
+    async def bulk_import(self, contacts_data: List[ContactCreate]) -> dict:
         """Import en masse de contacts avec déduplication."""
         stats = {"created": 0, "updated": 0, "skipped": 0, "errors": []}
 
