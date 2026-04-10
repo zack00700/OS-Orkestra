@@ -1,0 +1,58 @@
+# ═══════════════════════════════════════════════════════
+# OS Orkestra — .gitignore
+# ═══════════════════════════════════════════════════════
+
+# Python virtual environment
+backend/venv/
+venv/
+
+# Python cache
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Python eggs
+*.egg
+*.egg-info/
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment variables (contient les mots de passe)
+.env
+backend/.env
+
+# Node modules
+frontend/node_modules/
+node_modules/
+
+# Build output
+frontend/dist/
+frontend/build/
+
+# Logs
+*.log
+.backend.log
+.frontend.log
+
+# PID files
+.orkestra_pids
+
+# OS files
+.DS_Store
+**/.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Docker
+*.tar
