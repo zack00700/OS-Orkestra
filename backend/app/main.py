@@ -1,13 +1,15 @@
 """
 ╔═══════════════════════════════════════════════════════════╗
-║              OS HubLine — by OpenSID                      ║
+║              OS Orkestra — by OpenSID                      ║
 ║    Marketing Automation & Campaign Management Platform     ║
 ╚═══════════════════════════════════════════════════════════╝
 """
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 import logging
 import time
 
@@ -23,18 +25,18 @@ logging.basicConfig(
     format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("hubline")
+logger = logging.getLogger("orkestra")
 
 
 # ── Lifespan ────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("🚀 OS HubLine starting up...")
+    logger.info("OS Orkestra starting up...")
     if settings.ENVIRONMENT == "development":
         await init_db()
-        logger.info("📦 Database tables created (dev mode)")
+        logger.info("Database tables created (dev mode)")
     yield
-    logger.info("🛑 OS HubLine shutting down...")
+    logger.info("OS Orkestra shutting down...")
 
 
 # ── App ─────────────────────────────────────────────────
@@ -77,18 +79,8 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-# ── Routes ──────────────────────────────────────────────
+# ── API Routes ──────────────────────────────────────────
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
-
-
-@app.get("/", tags=["Root"])
-async def root():
-    return {
-        "app": settings.APP_NAME,
-        "version": settings.APP_VERSION,
-        "docs": "/docs",
-        "status": "running",
-    }
 
 
 @app.get("/health", tags=["Health"])
@@ -108,3 +100,42 @@ async def health():
             "native_json": caps.supports_native_json,
         },
     }
+
+
+# ── Frontend React (servir les fichiers buildés) ────────
+# Le build command sur Render copie frontend/dist → backend/frontend_dist
+FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend_dist")
+
+if os.path.exists(FRONTEND_DIR):
+    logger.info(f"Frontend found at {FRONTEND_DIR} — serving static files")
+
+    # Servir les assets (JS, CSS, images)
+    assets_dir = os.path.join(FRONTEND_DIR, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="static_assets")
+
+    # Catch-all : toute route non-API renvoie index.html (SPA routing)
+    @app.get("/{full_path:path}", tags=["Frontend"])
+    async def serve_frontend(full_path: str):
+        # Ne pas intercepter les routes API et docs
+        if full_path.startswith("api/") or full_path in ("docs", "redoc", "openapi.json", "health"):
+            return JSONResponse(status_code=404, content={"detail": "Not found"})
+
+        # Chercher le fichier exact (favicon, robots.txt, etc.)
+        file_path = os.path.join(FRONTEND_DIR, full_path)
+        if full_path and os.path.isfile(file_path):
+            return FileResponse(file_path)
+
+        # Sinon renvoyer index.html (React Router gère le routing côté client)
+        return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
+else:
+    logger.info("No frontend build found — API only mode")
+
+    @app.get("/", tags=["Root"])
+    async def root():
+        return {
+            "app": settings.APP_NAME,
+            "version": settings.APP_VERSION,
+            "docs": "/docs",
+            "status": "running",
+        }
