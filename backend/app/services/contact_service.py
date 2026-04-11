@@ -1,11 +1,11 @@
 """
-OS HubLine — Service Contacts (CRUD + logique métier)
-Compatible Python 3.9+
+OS Orkestra — Service Contacts (CRUD + logique métier)
+Compatible Python 3.9+ / pymssql sync + async
 """
 import uuid
 from datetime import datetime, timezone
 from typing import Optional, List
-from sqlalchemy import select, func, or_, and_
+from sqlalchemy import select, func, or_, and_, text, literal_column
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Contact, ContactStatus, ContactSource, LeadStage
 from app.schemas import ContactCreate, ContactUpdate, ContactListResponse, ContactResponse
@@ -15,7 +15,7 @@ from app.core.query_helpers import case_insensitive_like, array_overlap
 class ContactService:
     """Service de gestion des contacts."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db):
         self.db = db
 
     async def create(self, data: ContactCreate) -> Contact:
@@ -58,7 +58,6 @@ class ContactService:
     ) -> ContactListResponse:
         """Liste paginée et filtrable des contacts."""
         query = select(Contact)
-        count_query = select(func.count(Contact.id))
 
         filters = []
         if search:
@@ -84,13 +83,10 @@ class ContactService:
             filters.append(Contact.country == country)
         if business_unit:
             filters.append(Contact.business_unit == business_unit)
-        if tags:
-            filters.append(array_overlap(Contact.tags, tags))
 
         if filters:
             combined = and_(*filters)
             query = query.where(combined)
-            count_query = count_query.where(combined)
 
         sort_col = getattr(Contact, sort_by, Contact.created_at)
         if sort_order == "desc":
@@ -98,8 +94,11 @@ class ContactService:
         else:
             query = query.order_by(sort_col.asc())
 
-        total_result = await self.db.execute(count_query)
-        total = total_result.scalar() or 0
+        # Count total using raw SQL to avoid pymssql/GUID issues
+        count_result = await self.db.execute(text("SELECT COUNT(*) FROM contacts"))
+        row = count_result.fetchone()
+        total = row[0] if row else 0
+
         total_pages = max(1, (total + page_size - 1) // page_size)
 
         query = query.offset((page - 1) * page_size).limit(page_size)
@@ -176,26 +175,26 @@ class ContactService:
         return contact
 
     async def get_stats(self) -> dict:
-        total = await self.db.execute(select(func.count(Contact.id)))
-        active = await self.db.execute(
-            select(func.count(Contact.id)).where(Contact.status == ContactStatus.ACTIVE)
-        )
-        internal = await self.db.execute(
-            select(func.count(Contact.id)).where(Contact.is_internal == True)
-        )
-        by_source = await self.db.execute(
-            select(Contact.source, func.count(Contact.id))
-            .group_by(Contact.source)
-        )
-        by_stage = await self.db.execute(
-            select(Contact.lead_stage, func.count(Contact.id))
-            .group_by(Contact.lead_stage)
-        )
+        # Use raw SQL to avoid pymssql type conversion issues with COUNT + GUID
+        total_r = await self.db.execute(text("SELECT COUNT(*) FROM contacts"))
+        total = total_r.fetchone()[0]
+
+        active_r = await self.db.execute(text("SELECT COUNT(*) FROM contacts WHERE status = 'ACTIVE'"))
+        active = active_r.fetchone()[0]
+
+        internal_r = await self.db.execute(text("SELECT COUNT(*) FROM contacts WHERE is_internal = 1"))
+        internal = internal_r.fetchone()[0]
+
+        by_source_r = await self.db.execute(text("SELECT source, COUNT(*) as cnt FROM contacts GROUP BY source"))
+        by_source = {str(row[0]): row[1] for row in by_source_r.fetchall()}
+
+        by_stage_r = await self.db.execute(text("SELECT lead_stage, COUNT(*) as cnt FROM contacts GROUP BY lead_stage"))
+        by_stage = {str(row[0]): row[1] for row in by_stage_r.fetchall()}
 
         return {
-            "total": total.scalar() or 0,
-            "active": active.scalar() or 0,
-            "internal": internal.scalar() or 0,
-            "by_source": {str(row[0]): row[1] for row in by_source.all()},
-            "by_stage": {str(row[0]): row[1] for row in by_stage.all()},
+            "total": total,
+            "active": active,
+            "internal": internal,
+            "by_source": by_source,
+            "by_stage": by_stage,
         }
