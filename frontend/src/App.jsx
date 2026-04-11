@@ -2,9 +2,10 @@ import { useState, useEffect, useCallback } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from "recharts";
 import { Search, Users, Mail, BarChart3, Zap, Send, Eye, MousePointerClick, RefreshCw, Filter, Plus, LayoutDashboard, Target, Database, Link2, LogOut, ChevronLeft, ChevronRight, X, Calendar, FileText, ArrowUpRight, ArrowDownRight, Layers } from "lucide-react";
 
+// Auto-detect: localhost = dev, sinon = Render production
 const API = window.location.hostname === "localhost"
   ? "http://localhost:8000/api/v1"
-  : "/api/v1";
+  : \`\${window.location.origin.replace("-front", "-api")}/api/v1\`;
 
 // ══════════════════════════════════════════════════════════
 // API HELPER
@@ -350,26 +351,167 @@ function CampaignsPage() {
 // SEGMENTS
 // ══════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════
+// SEGMENTS (DYNAMIQUES) — Remplacer l'ancien SegmentsPage dans App.jsx
+// ══════════════════════════════════════════════════════════
+
 function SegmentsPage() {
   const [segments, setSegments] = useState([]);
   const [loading, setLoading] = useState(true);
-  useEffect(() => { api("/segments/").then(d => { setSegments(d || []); setLoading(false); }).catch(() => setLoading(false)); }, []);
+  const [selectedSegment, setSelectedSegment] = useState(null);
+  const [segmentContacts, setSegmentContacts] = useState([]);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [newSeg, setNewSeg] = useState({ name: "", description: "", filter_field: "country", filter_value: "" });
+  const [creating, setCreating] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try { const d = await api("/segments/"); setSegments(d || []); }
+    catch (e) { console.error(e); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, []);
+
+  const viewSegment = async (seg) => {
+    setSelectedSegment(seg);
+    setContactsLoading(true);
+    try {
+      const d = await api(`/segments/${seg.id}/contacts?page=1&page_size=50`);
+      setSegmentContacts(d?.contacts || []);
+    } catch (e) { console.error(e); setSegmentContacts([]); }
+    setContactsLoading(false);
+  };
+
+  const handleCreate = async () => {
+    if (!newSeg.name) return alert("Nom requis");
+    setCreating(true);
+    try {
+      const filter = {};
+      if (newSeg.filter_value) {
+        filter[newSeg.filter_field] = newSeg.filter_value;
+      }
+      await api("/segments/", {
+        method: "POST",
+        body: JSON.stringify({
+          name: newSeg.name,
+          description: newSeg.description || `Segment ${newSeg.name}`,
+          filter_criteria: filter,
+          is_dynamic: true,
+        }),
+      });
+      setShowCreate(false);
+      setNewSeg({ name: "", description: "", filter_field: "country", filter_value: "" });
+      load();
+    } catch (err) { alert("Erreur: " + err.message); }
+    setCreating(false);
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm("Supprimer ce segment ?")) return;
+    try { await api(`/segments/${id}`, { method: "DELETE" }); setSelectedSegment(null); load(); }
+    catch (err) { alert("Erreur: " + err.message); }
+  };
+
   return (
     <div className="p-8">
-      <h2 className="text-xl font-bold text-slate-900 mb-6">Segments</h2>
-      <div className="grid grid-cols-3 gap-4">{segments.map(s => (
-        <div key={s.id} className="bg-white rounded-2xl border border-slate-100 p-6 hover:border-slate-200 transition-all">
-          <div className="flex items-center gap-3 mb-3"><div className="w-10 h-10 rounded-xl bg-sky-50 flex items-center justify-center"><Target size={18} className="text-sky-600" /></div><div><div className="text-sm font-bold text-slate-900">{s.name}</div><div className="text-xs text-slate-400">{s.description}</div></div></div>
-          <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-50"><span className="text-xs text-slate-500">{s.is_dynamic ? "Dynamique" : "Statique"}</span><span className="text-lg font-bold text-slate-900">{s.contact_count}</span></div>
+      <div className="flex items-center justify-between mb-6">
+        <div><h2 className="text-xl font-bold text-slate-900">Segments</h2><p className="text-sm text-slate-400">{segments.length} segments · comptage dynamique</p></div>
+        <button onClick={() => setShowCreate(true)} className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 text-white rounded-xl text-sm font-medium hover:bg-slate-800"><Plus size={16}/>Nouveau segment</button>
+      </div>
+
+      <div className="grid grid-cols-3 gap-4 mb-8">
+        {segments.map(s => (
+          <button key={s.id} onClick={() => viewSegment(s)} className={`text-left bg-white rounded-2xl border p-5 hover:border-sky-400 transition-all ${selectedSegment?.id === s.id ? "border-sky-400 ring-2 ring-sky-100" : "border-slate-100"}`}>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-sky-50 flex items-center justify-center"><Target size={18} className="text-sky-600" /></div>
+              <div><div className="text-sm font-bold text-slate-900">{s.name}</div><div className="text-xs text-slate-400">{s.description}</div></div>
+            </div>
+            <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-50">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-500">{s.is_dynamic ? "Dynamique" : "Statique"}</span>
+                {s.filter_criteria && Object.keys(s.filter_criteria).length > 0 && (
+                  <span className="text-xs bg-sky-50 text-sky-600 px-2 py-0.5 rounded-full">
+                    {Object.entries(s.filter_criteria).map(([k,v]) => `${k}=${v}`).join(", ")}
+                  </span>
+                )}
+              </div>
+              <span className="text-lg font-bold text-slate-900">{s.contact_count}</span>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {/* Détail du segment sélectionné */}
+      {selectedSegment && (
+        <div className="bg-white rounded-2xl border border-slate-100 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-base font-bold text-slate-900">Contacts dans « {selectedSegment.name} »</h3>
+              <p className="text-xs text-slate-400">{segmentContacts.length} contacts affichés</p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => handleDelete(selectedSegment.id)} className="px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 rounded-lg">Supprimer</button>
+              <button onClick={() => setSelectedSegment(null)} className="px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-50 rounded-lg">Fermer</button>
+            </div>
+          </div>
+          {contactsLoading ? (
+            <div className="py-8 text-center text-slate-400">Chargement...</div>
+          ) : segmentContacts.length === 0 ? (
+            <div className="py-8 text-center text-slate-400">Aucun contact dans ce segment</div>
+          ) : (
+            <table className="w-full">
+              <thead><tr className="border-b border-slate-100">
+                <th className="text-left text-xs font-medium text-slate-400 pb-3">Contact</th>
+                <th className="text-left text-xs font-medium text-slate-400 pb-3">Entreprise</th>
+                <th className="text-left text-xs font-medium text-slate-400 pb-3">Pays</th>
+                <th className="text-left text-xs font-medium text-slate-400 pb-3">Poste</th>
+                <th className="text-right text-xs font-medium text-slate-400 pb-3">Score</th>
+              </tr></thead>
+              <tbody>{segmentContacts.map(c => (
+                <tr key={c.id} className="border-b border-slate-50 hover:bg-slate-50/50">
+                  <td className="py-2.5"><div><div className="text-sm font-medium text-slate-800">{c.first_name} {c.last_name}</div><div className="text-xs text-slate-400">{c.email}</div></div></td>
+                  <td className="py-2.5 text-sm text-slate-600">{c.company || "—"}</td>
+                  <td className="py-2.5 text-sm text-slate-600">{c.country || "—"}</td>
+                  <td className="py-2.5 text-sm text-slate-600">{c.job_title || "—"}</td>
+                  <td className="py-2.5 text-right"><span className={`text-sm font-bold ${c.lead_score >= 80 ? "text-emerald-600" : c.lead_score >= 50 ? "text-amber-600" : "text-slate-500"}`}>{c.lead_score}</span></td>
+                </tr>
+              ))}</tbody>
+            </table>
+          )}
         </div>
-      ))}</div>
+      )}
+
+      {/* Modal création segment */}
+      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Nouveau segment">
+        <div className="space-y-4">
+          <div><label className="text-sm font-medium text-slate-700 mb-1 block">Nom du segment *</label>
+            <input value={newSeg.name} onChange={e => setNewSeg({...newSeg, name: e.target.value})} placeholder="Ex: Clients Afrique" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+          <div><label className="text-sm font-medium text-slate-700 mb-1 block">Description</label>
+            <input value={newSeg.description} onChange={e => setNewSeg({...newSeg, description: e.target.value})} placeholder="Description du segment" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+          <div className="grid grid-cols-2 gap-4">
+            <div><label className="text-sm font-medium text-slate-700 mb-1 block">Filtrer par</label>
+              <select value={newSeg.filter_field} onChange={e => setNewSeg({...newSeg, filter_field: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400">
+                <option value="country">Pays</option>
+                <option value="city">Ville</option>
+                <option value="company">Entreprise</option>
+                <option value="source">Source</option>
+                <option value="status">Statut</option>
+                <option value="business_unit">Business Unit</option>
+              </select></div>
+            <div><label className="text-sm font-medium text-slate-700 mb-1 block">Valeur</label>
+              <input value={newSeg.filter_value} onChange={e => setNewSeg({...newSeg, filter_value: e.target.value})} placeholder="Ex: Ghana, France..." className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+          </div>
+          <p className="text-xs text-slate-400">Laissez la valeur vide pour un segment qui inclut tous les contacts.</p>
+          <div className="flex gap-3 pt-2">
+            <button onClick={() => setShowCreate(false)} className="flex-1 px-4 py-2.5 border border-slate-200 text-slate-600 rounded-xl text-sm font-medium hover:bg-slate-50">Annuler</button>
+            <button onClick={handleCreate} disabled={creating} className="flex-1 px-4 py-2.5 bg-slate-900 text-white rounded-xl text-sm font-medium hover:bg-slate-800 disabled:opacity-50">{creating ? "Création..." : "Créer le segment"}</button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
-
-// ══════════════════════════════════════════════════════════
-// ANALYTICS
-// ══════════════════════════════════════════════════════════
 
 function AnalyticsPage() {
   const [overview, setOverview] = useState(null);
