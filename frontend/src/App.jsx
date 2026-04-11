@@ -2,10 +2,9 @@ import { useState, useEffect, useCallback } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from "recharts";
 import { Search, Users, Mail, BarChart3, Zap, Send, Eye, MousePointerClick, RefreshCw, Filter, Plus, LayoutDashboard, Target, Database, Link2, LogOut, ChevronLeft, ChevronRight, X, Calendar, FileText, ArrowUpRight, ArrowDownRight, Layers } from "lucide-react";
 
-// Auto-detect: localhost = dev, sinon = Render production
 const API = window.location.hostname === "localhost"
   ? "http://localhost:8000/api/v1"
-  : \`\${window.location.origin.replace("-front", "-api")}/api/v1\`;
+  : "/api/v1";
 
 // ══════════════════════════════════════════════════════════
 // API HELPER
