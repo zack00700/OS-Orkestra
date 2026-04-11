@@ -1,14 +1,8 @@
 """
 OS HubLine — Couche d'abstraction base de données multi-moteur
+Compatible Python 3.9+
 
-Supporte : PostgreSQL, SQL Server, MySQL/MariaDB, SQLite, Oracle
-Gère automatiquement les différences dialectales :
-  - UUID : natif (PG) vs CHAR(36) (autres)
-  - ARRAY : natif (PG) vs JSON/TEXT sérialisé (autres)
-  - JSON : natif (PG/MySQL) vs NVARCHAR(MAX) (SQL Server) vs TEXT (SQLite)
-  - Pagination : LIMIT/OFFSET vs OFFSET FETCH vs ROWNUM
-  - String functions : ILIKE (PG) vs LIKE + COLLATE (SQL Server) vs LOWER+LIKE
-  - Boolean : natif (PG/MySQL) vs BIT (SQL Server) vs INTEGER (SQLite)
+Supporte : PostgreSQL, SQL Server (pyodbc + pymssql), MySQL, SQLite, Oracle
 """
 import logging
 from enum import Enum
@@ -26,10 +20,6 @@ from app.core.config import get_settings
 logger = logging.getLogger("hubline.database")
 settings = get_settings()
 
-
-# ══════════════════════════════════════════════════════════
-# DATABASE DIALECT DETECTION
-# ══════════════════════════════════════════════════════════
 
 class DatabaseDialect(str, Enum):
     POSTGRESQL = "postgresql"
@@ -50,65 +40,77 @@ _DIALECT_MAP = {
     "oracle": DatabaseDialect.ORACLE,
 }
 
-_ASYNC_DRIVERS = {
-    DatabaseDialect.POSTGRESQL: "asyncpg",
-    DatabaseDialect.SQLSERVER: "aioodbc",
-    DatabaseDialect.MYSQL: "aiomysql",
-    DatabaseDialect.MARIADB: "aiomysql",
-    DatabaseDialect.SQLITE: "aiosqlite",
-    DatabaseDialect.ORACLE: "oracledb",
-}
-
-_SYNC_DRIVERS = {
-    DatabaseDialect.POSTGRESQL: "psycopg2",
-    DatabaseDialect.SQLSERVER: "pyodbc",
-    DatabaseDialect.MYSQL: "pymysql",
-    DatabaseDialect.MARIADB: "pymysql",
-    DatabaseDialect.SQLITE: "",
-    DatabaseDialect.ORACLE: "oracledb",
-}
-
 
 def detect_dialect(url: str) -> DatabaseDialect:
     scheme = url.split("://")[0].split("+")[0].lower()
     dialect = _DIALECT_MAP.get(scheme)
     if not dialect:
-        raise ValueError(
-            f"Dialecte non supporté : '{scheme}'. "
-            f"Supportés : {', '.join(_DIALECT_MAP.keys())}"
-        )
+        raise ValueError(f"Dialecte non supporté : '{scheme}'")
     return dialect
 
 
 def get_async_url(url: str) -> str:
-    """Normalise l'URL pour le driver async approprié."""
+    """
+    Normalise l'URL pour le driver async.
+    Gère pyodbc, pymssql, et les autres drivers.
+    """
     dialect = detect_dialect(url)
-    driver = _ASYNC_DRIVERS[dialect]
-    if f"+{driver}" in url:
+
+    # Si déjà un driver async spécifié, garder tel quel
+    if "+aioodbc" in url or "+aiosqlite" in url or "+asyncpg" in url or "+aiomysql" in url:
         return url
-    parts = url.split("://", 1)
-    base_scheme = parts[0].split("+")[0]
-    new_scheme = f"{base_scheme}+{driver}" if driver else base_scheme
-    return f"{new_scheme}://{parts[1]}"
 
+    # SQL Server : détecter pyodbc vs pymssql
+    if dialect == DatabaseDialect.SQLSERVER:
+        if "+pyodbc" in url:
+            return url.replace("+pyodbc", "+aioodbc")
+        elif "+pymssql" in url:
+            # pymssql n'a pas de driver async natif, on utilise le mode sync dans un thread
+            # SQLAlchemy gère ça automatiquement avec create_async_engine
+            return url
+        else:
+            # Pas de driver spécifié, essayer pymssql d'abord (plus portable, pas besoin d'ODBC)
+            try:
+                import pymssql
+                parts = url.split("://", 1)
+                return f"mssql+pymssql://{parts[1]}"
+            except ImportError:
+                pass
+            try:
+                import aioodbc
+                parts = url.split("://", 1)
+                return f"mssql+aioodbc://{parts[1]}"
+            except ImportError:
+                pass
+            return url
 
-def get_sync_url(url: str) -> str:
-    """Normalise l'URL pour le driver sync (Alembic)."""
-    dialect = detect_dialect(url)
-    driver = _SYNC_DRIVERS[dialect]
-    parts = url.split("://", 1)
-    base_scheme = parts[0].split("+")[0]
-    new_scheme = f"{base_scheme}+{driver}" if driver else base_scheme
-    return f"{new_scheme}://{parts[1]}"
+    # PostgreSQL
+    if dialect == DatabaseDialect.POSTGRESQL:
+        if "+asyncpg" not in url:
+            parts = url.split("://", 1)
+            base = parts[0].split("+")[0]
+            return f"{base}+asyncpg://{parts[1]}"
+        return url
 
+    # MySQL
+    if dialect in (DatabaseDialect.MYSQL, DatabaseDialect.MARIADB):
+        if "+aiomysql" not in url:
+            parts = url.split("://", 1)
+            base = parts[0].split("+")[0]
+            return f"{base}+aiomysql://{parts[1]}"
+        return url
 
-# ══════════════════════════════════════════════════════════
-# DIALECT CAPABILITIES
-# ══════════════════════════════════════════════════════════
+    # SQLite
+    if dialect == DatabaseDialect.SQLITE:
+        if "+aiosqlite" not in url:
+            parts = url.split("://", 1)
+            return f"sqlite+aiosqlite://{parts[1]}"
+        return url
+
+    return url
+
 
 class DialectCapabilities:
-    """Décrit les capacités et limites de chaque moteur SQL."""
-
     def __init__(self, dialect: DatabaseDialect):
         self.dialect = dialect
 
@@ -122,9 +124,7 @@ class DialectCapabilities:
 
     @property
     def supports_native_json(self) -> bool:
-        return self.dialect in (
-            DatabaseDialect.POSTGRESQL, DatabaseDialect.MYSQL, DatabaseDialect.MARIADB,
-        )
+        return self.dialect in (DatabaseDialect.POSTGRESQL, DatabaseDialect.MYSQL, DatabaseDialect.MARIADB)
 
     @property
     def supports_ilike(self) -> bool:
@@ -132,26 +132,14 @@ class DialectCapabilities:
 
     @property
     def supports_returning(self) -> bool:
-        return self.dialect in (
-            DatabaseDialect.POSTGRESQL, DatabaseDialect.SQLSERVER,
-            DatabaseDialect.ORACLE, DatabaseDialect.SQLITE,
-        )
+        return self.dialect in (DatabaseDialect.POSTGRESQL, DatabaseDialect.SQLSERVER, DatabaseDialect.ORACLE, DatabaseDialect.SQLITE)
 
     @property
     def supports_boolean_native(self) -> bool:
-        return self.dialect in (
-            DatabaseDialect.POSTGRESQL, DatabaseDialect.MYSQL, DatabaseDialect.MARIADB,
-        )
+        return self.dialect in (DatabaseDialect.POSTGRESQL, DatabaseDialect.MYSQL, DatabaseDialect.MARIADB)
 
     @property
     def pagination_style(self) -> str:
-        """
-        'limit_offset'  : LIMIT n OFFSET m (PG, MySQL, SQLite)
-        'offset_fetch'  : OFFSET m ROWS FETCH NEXT n ROWS ONLY (SQL Server 2012+)
-        'rownum'        : WHERE ROWNUM <= n (Oracle legacy)
-        Note : SQLAlchemy .limit().offset() gère la traduction auto,
-               mais cette info sert pour le raw SQL.
-        """
         if self.dialect == DatabaseDialect.SQLSERVER:
             return "offset_fetch"
         elif self.dialect == DatabaseDialect.ORACLE:
@@ -160,60 +148,24 @@ class DialectCapabilities:
 
     @property
     def max_parameters_per_query(self) -> int:
-        limits = {
-            DatabaseDialect.SQLITE: 999,
-            DatabaseDialect.SQLSERVER: 2100,
-            DatabaseDialect.MYSQL: 65535,
-            DatabaseDialect.POSTGRESQL: 32767,
-            DatabaseDialect.ORACLE: 65535,
-        }
+        limits = {DatabaseDialect.SQLITE: 999, DatabaseDialect.SQLSERVER: 2100, DatabaseDialect.MYSQL: 65535, DatabaseDialect.POSTGRESQL: 32767, DatabaseDialect.ORACLE: 65535}
         return limits.get(self.dialect, 10000)
 
     @property
     def default_schema(self) -> Optional[str]:
-        schemas = {
-            DatabaseDialect.POSTGRESQL: "public",
-            DatabaseDialect.SQLSERVER: "dbo",
-        }
-        return schemas.get(self.dialect)
+        return {"postgresql": "public", "mssql": "dbo"}.get(self.dialect.value)
 
     @property
     def json_extract_function(self) -> str:
-        """
-        PG       : json_column->>'key'
-        SQL Server: JSON_VALUE(column, '$.key')
-        MySQL    : JSON_EXTRACT(column, '$.key')
-        SQLite   : json_extract(column, '$.key')
-        """
-        return {
-            DatabaseDialect.POSTGRESQL: "arrow",
-            DatabaseDialect.SQLSERVER: "json_value",
-            DatabaseDialect.MYSQL: "json_extract",
-            DatabaseDialect.MARIADB: "json_extract",
-            DatabaseDialect.SQLITE: "json_extract",
-            DatabaseDialect.ORACLE: "json_value",
-        }[self.dialect]
+        return {"postgresql": "arrow", "mssql": "json_value", "mysql": "json_extract", "mariadb": "json_extract", "sqlite": "json_extract", "oracle": "json_value"}[self.dialect.value]
 
     def get_engine_options(self) -> dict:
-        base = {
-            "pool_pre_ping": True,
-            "pool_size": settings.DATABASE_POOL_SIZE,
-            "max_overflow": settings.DATABASE_MAX_OVERFLOW,
-            "echo": settings.DATABASE_ECHO,
-        }
+        base = {"pool_pre_ping": True, "pool_size": settings.DATABASE_POOL_SIZE, "max_overflow": settings.DATABASE_MAX_OVERFLOW, "echo": settings.DATABASE_ECHO}
         if self.dialect == DatabaseDialect.SQLITE:
             base.pop("pool_size", None)
             base.pop("max_overflow", None)
-        if self.dialect == DatabaseDialect.SQLSERVER:
-            base["connect_args"] = {"TrustServerCertificate": "yes", "timeout": 30}
-        if self.dialect in (DatabaseDialect.MYSQL, DatabaseDialect.MARIADB):
-            base["connect_args"] = {"charset": "utf8mb4"}
         return base
 
-
-# ══════════════════════════════════════════════════════════
-# ENGINE FACTORY
-# ══════════════════════════════════════════════════════════
 
 _current_dialect: Optional[DatabaseDialect] = None
 _capabilities: Optional[DialectCapabilities] = None
@@ -239,10 +191,16 @@ def create_engine_for_dialect() -> AsyncEngine:
     async_url = get_async_url(settings.DATABASE_URL)
     engine_opts = caps.get_engine_options()
 
-    logger.info(
-        f"Initialisation DB : dialect={dialect.value}, "
-        f"driver={_ASYNC_DRIVERS[dialect]}, pagination={caps.pagination_style}"
-    )
+    logger.info(f"DB init: dialect={dialect.value}, url_scheme={async_url.split('://')[0]}")
+
+    # pymssql ne supporte pas l'async nativement, mais SQLAlchemy le gère
+    # en wrappant les appels sync dans un thread pool
+    if "+pymssql" in async_url:
+        from sqlalchemy import create_engine
+        sync_engine = create_engine(async_url.replace("+pymssql", "+pymssql"), **engine_opts)
+        from sqlalchemy.ext.asyncio import AsyncEngine as AE
+        eng = AsyncEngine(sync_engine)
+        return eng
 
     eng = create_async_engine(async_url, **engine_opts)
 
@@ -254,26 +212,11 @@ def create_engine_for_dialect() -> AsyncEngine:
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.close()
 
-    if dialect == DatabaseDialect.SQLSERVER:
-        @event.listens_for(eng.sync_engine, "connect")
-        def _mssql_options(dbapi_conn, connection_record):
-            cursor = dbapi_conn.cursor()
-            cursor.execute("SET ANSI_NULLS ON")
-            cursor.execute("SET QUOTED_IDENTIFIER ON")
-            cursor.close()
-
     return eng
 
 
-# ══════════════════════════════════════════════════════════
-# SESSION
-# ══════════════════════════════════════════════════════════
-
 engine = create_engine_for_dialect()
-
-async_session_factory = async_sessionmaker(
-    engine, class_=AsyncSession, expire_on_commit=False,
-)
+async_session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
 class Base(DeclarativeBase):
@@ -303,6 +246,6 @@ async def check_db_connection() -> dict:
         async with engine.begin() as conn:
             q = "SELECT 1 FROM DUAL" if dialect == DatabaseDialect.ORACLE else "SELECT 1"
             result = await conn.execute(text(q))
-            return {"status": "connected", "dialect": dialect.value, "driver": _ASYNC_DRIVERS[dialect]}
+            return {"status": "connected", "dialect": dialect.value}
     except Exception as e:
         return {"status": "error", "dialect": dialect.value, "error": str(e)}
