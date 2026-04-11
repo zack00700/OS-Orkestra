@@ -187,14 +187,26 @@ async def _test_database(config: Dict[str, Any]) -> Dict[str, Any]:
         database = config.get("database", "master")
 
         if db_type == "mssql":
-            import pyodbc
-            conn_str = f"DRIVER={{ODBC Driver 18 for SQL Server}};SERVER={host},{port};DATABASE={database};UID={username};PWD={password};TrustServerCertificate=yes;Connection Timeout=10"
-            conn = pyodbc.connect(conn_str, timeout=10)
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1")
-            cursor.close()
-            conn.close()
-            return {"success": True, "message": f"Connecté à SQL Server {host}:{port}/{database}"}
+            try:
+                import pymssql
+                conn = pymssql.connect(
+                    server=host, port=int(port), user=username,
+                    password=password, database=database, login_timeout=10,
+                )
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                cursor.close()
+                conn.close()
+                return {"success": True, "message": f"Connecté à SQL Server {host}:{port}/{database}"}
+            except ImportError:
+                import pyodbc
+                conn_str = f"DRIVER={{ODBC Driver 18 for SQL Server}};SERVER={host},{port};DATABASE={database};UID={username};PWD={password};TrustServerCertificate=yes;Connection Timeout=10"
+                conn = pyodbc.connect(conn_str, timeout=10)
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                cursor.close()
+                conn.close()
+                return {"success": True, "message": f"Connecté à SQL Server {host}:{port}/{database}"}
 
         elif db_type == "postgresql":
             # Test basique via socket
