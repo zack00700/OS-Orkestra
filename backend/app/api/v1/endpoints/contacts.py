@@ -2,7 +2,7 @@
 OS HubLine — API Endpoints : Contacts
 """
 from uuid import UUID
-from typing import Optional
+from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
@@ -113,7 +113,7 @@ async def delete_contact(
 
 @router.post("/bulk-import", response_model=dict)
 async def bulk_import_contacts(
-    contacts: list[ContactCreate],
+    contacts: List[ContactCreate],
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(require_roles("admin", "manager")),
 ):

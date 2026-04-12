@@ -7,6 +7,7 @@ import uuid
 import json
 import smtplib
 import logging
+import asyncio
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone
@@ -139,11 +140,8 @@ async def test_smtp_connection(
         raise HTTPException(status_code=400, detail="SMTP non configuré")
 
     try:
-        server = smtplib.SMTP(smtp["host"], smtp["port"], timeout=10)
-        if smtp.get("use_tls", True):
-            server.starttls()
-        server.login(smtp["username"], smtp["password"])
-        server.quit()
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _test_smtp_sync, smtp)
         _diffusion_config["smtp"]["status"] = "connected"
         _diffusion_config["smtp"]["last_tested"] = datetime.now(timezone.utc).isoformat()
         return {"success": True, "message": f"Connecté à {smtp['host']}:{smtp['port']}"}
@@ -153,6 +151,17 @@ async def test_smtp_connection(
     except Exception as e:
         _diffusion_config["smtp"]["status"] = "error"
         return {"success": False, "message": f"Erreur : {str(e)}"}
+
+
+def _test_smtp_sync(smtp: dict):
+    """Test SMTP dans un thread pool."""
+    server = smtplib.SMTP(smtp["host"], smtp["port"], timeout=10)
+    try:
+        if smtp.get("use_tls", True):
+            server.starttls()
+        server.login(smtp["username"], smtp["password"])
+    finally:
+        server.quit()
 
 
 @router.post("/send-test-email")
@@ -166,7 +175,7 @@ async def send_test_email(
         raise HTTPException(status_code=400, detail="SMTP non configuré — allez dans Diffusion > Email")
 
     try:
-        result = _send_email(
+        result = await _send_email_async(
             to_email=data.to_email,
             subject=data.subject,
             html_content=f"<html><body><h2>{data.subject}</h2><p>{data.body}</p><hr><small>Envoyé depuis OS Orkestra</small></body></html>",
@@ -250,8 +259,8 @@ async def launch_campaign(
         txt = txt.replace("{{last_name}}", last_name)
         txt = txt.replace("{{company}}", company)
 
-        # Envoyer
-        send_result = _send_email(
+        # Envoyer (non-bloquant via thread pool)
+        send_result = await _send_email_async(
             to_email=email,
             subject=subject,
             html_content=html,
@@ -280,7 +289,7 @@ async def launch_campaign(
             ))
         else:
             stats["errors"] += 1
-            logger.warning(f"Email failed for {email}: {send_result.get('message')}")
+            logger.warning("Email failed for %s: %s", email, send_result.get("message"))
 
     # Mettre à jour les compteurs
     campaign.total_sent = stats["sent"]
@@ -358,19 +367,38 @@ async def _get_segment_contacts(db, segment_id) -> list:
     return result.fetchall()
 
 
-def _send_email(
+async def _send_email_async(
     to_email: str,
     subject: str,
     html_content: str,
     text_content: str = "",
-    smtp_config: dict = None,
-    from_email: str = None,
-    from_name: str = None,
+    smtp_config: Optional[dict] = None,
+    from_email: Optional[str] = None,
+    from_name: Optional[str] = None,
 ) -> dict:
-    """Envoie un email via SMTP."""
+    """Envoie un email via SMTP dans un thread pool (non-bloquant)."""
     if not smtp_config:
         return {"success": False, "message": "SMTP non configuré"}
 
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        _send_email_sync,
+        to_email, subject, html_content, text_content,
+        smtp_config, from_email, from_name,
+    )
+
+
+def _send_email_sync(
+    to_email: str,
+    subject: str,
+    html_content: str,
+    text_content: str = "",
+    smtp_config: Optional[dict] = None,
+    from_email: Optional[str] = None,
+    from_name: Optional[str] = None,
+) -> dict:
+    """Envoie un email via SMTP (sync, exécuté dans un thread)."""
     sender_email = from_email or smtp_config.get("from_email", smtp_config["username"])
     sender_name = from_name or smtp_config.get("from_name", "OS Orkestra")
 
@@ -385,12 +413,14 @@ def _send_email(
 
     try:
         server = smtplib.SMTP(smtp_config["host"], smtp_config["port"], timeout=15)
-        if smtp_config.get("use_tls", True):
-            server.starttls()
-        server.login(smtp_config["username"], smtp_config["password"])
-        server.sendmail(sender_email, [to_email], msg.as_string())
-        server.quit()
-        logger.info(f"Email sent to {to_email}")
+        try:
+            if smtp_config.get("use_tls", True):
+                server.starttls()
+            server.login(smtp_config["username"], smtp_config["password"])
+            server.sendmail(sender_email, [to_email], msg.as_string())
+        finally:
+            server.quit()
+        logger.info("Email sent to %s", to_email)
         return {"success": True, "message": f"Email envoyé à {to_email}"}
     except smtplib.SMTPRecipientsRefused:
         return {"success": False, "message": f"Destinataire refusé : {to_email}"}
