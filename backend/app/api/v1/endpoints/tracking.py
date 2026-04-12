@@ -1,15 +1,19 @@
 """
 OS Orkestra — Endpoints de tracking (ouvertures et clics)
++ Scoring automatique des contacts
 Compatible Python 3.9+
 """
-from uuid import UUID
+import uuid
+import logging
+from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import RedirectResponse, Response
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, text
 from app.core.database import get_db
-from app.services import CampaignService
-from app.models.models import EventType
+from app.models.models import CampaignEvent, EventType, Contact, Campaign
+
+logger = logging.getLogger("orkestra.tracking")
 
 router = APIRouter(prefix="/tracking", tags=["Tracking"])
 
@@ -22,21 +26,108 @@ TRACKING_PIXEL = bytes([
     0x01, 0x00, 0x3B
 ])
 
+# ══════════════════════════════════════════════════════════
+# SCORING CONFIG
+# ══════════════════════════════════════════════════════════
+
+SCORE_RULES = {
+    EventType.OPENED: 5,
+    EventType.CLICKED: 10,
+    EventType.UNSUBSCRIBED: -20,
+    EventType.BOUNCED_SOFT: -5,
+    EventType.BOUNCED_HARD: -10,
+}
+
+
+def _calculate_lead_stage(score: int) -> str:
+    """Détermine le lead_stage basé sur le score."""
+    if score >= 80:
+        return "PURCHASE"
+    elif score >= 50:
+        return "CONSIDERATION"
+    elif score >= 20:
+        return "INTEREST"
+    return "AWARENESS"
+
+
+async def _update_contact_score(db, contact_id: str, event_type: EventType):
+    """Met à jour le lead_score et lead_stage d'un contact après un événement."""
+    delta = SCORE_RULES.get(event_type, 0)
+    if delta == 0:
+        return
+
+    try:
+        result = await db.execute(
+            select(Contact).where(Contact.id == contact_id)
+        )
+        contact = result.scalar_one_or_none()
+        if not contact:
+            return
+
+        new_score = max(0, (contact.lead_score or 0) + delta)
+        new_stage = _calculate_lead_stage(new_score)
+
+        await db.execute(
+            text("UPDATE contacts SET lead_score = :score, lead_stage = :stage WHERE id = :id"),
+            {"score": new_score, "stage": new_stage, "id": contact_id}
+        )
+        await db.flush()
+        logger.info("Contact %s score updated: %d -> %d (%s), stage: %s",
+                     contact_id, contact.lead_score or 0, new_score, event_type.value, new_stage)
+    except Exception as e:
+        logger.warning("Failed to update score for contact %s: %s", contact_id, str(e))
+
+
+async def _record_event(db, campaign_id: str, contact_id: str, event_type: EventType, url_clicked: Optional[str] = None):
+    """Enregistre un événement de campagne et met à jour le score."""
+    try:
+        # Enregistrer l'événement
+        event = CampaignEvent(
+            id=str(uuid.uuid4()),
+            campaign_id=str(campaign_id),
+            contact_id=str(contact_id),
+            event_type=event_type,
+            timestamp=datetime.now(timezone.utc),
+            url_clicked=url_clicked,
+        )
+        db.add(event)
+
+        # Mettre à jour les compteurs de la campagne
+        counter_map = {
+            EventType.OPENED: "total_opened",
+            EventType.CLICKED: "total_clicked",
+            EventType.UNSUBSCRIBED: "total_unsubscribed",
+            EventType.BOUNCED_SOFT: "total_bounced",
+            EventType.BOUNCED_HARD: "total_bounced",
+        }
+        counter_col = counter_map.get(event_type)
+        if counter_col:
+            await db.execute(
+                text(f"UPDATE campaigns SET {counter_col} = {counter_col} + 1 WHERE id = :cid"),
+                {"cid": str(campaign_id)}
+            )
+
+        # Mettre à jour le score du contact
+        await _update_contact_score(db, str(contact_id), event_type)
+
+        await db.flush()
+    except Exception as e:
+        logger.warning("Failed to record event: %s", str(e))
+
+
+# ══════════════════════════════════════════════════════════
+# ENDPOINTS
+# ══════════════════════════════════════════════════════════
 
 @router.get("/open/{campaign_id}/{contact_id}")
 async def track_open(
-    campaign_id: UUID,
-    contact_id: UUID,
-    db: AsyncSession = Depends(get_db),
+    campaign_id: str,
+    contact_id: str,
+    db=Depends(get_db),
 ):
-    """Pixel de tracking — enregistre une ouverture."""
+    """Pixel de tracking — enregistre une ouverture + met à jour le score (+5)."""
     try:
-        service = CampaignService(db)
-        await service.record_event(
-            campaign_id=campaign_id,
-            contact_id=contact_id,
-            event_type=EventType.OPENED,
-        )
+        await _record_event(db, campaign_id, contact_id, EventType.OPENED)
     except Exception:
         pass  # Ne jamais bloquer le rendu de l'email
     return Response(content=TRACKING_PIXEL, media_type="image/gif")
@@ -44,20 +135,58 @@ async def track_open(
 
 @router.get("/click/{campaign_id}/{contact_id}")
 async def track_click(
-    campaign_id: UUID,
-    contact_id: UUID,
+    campaign_id: str,
+    contact_id: str,
     url: str = Query(...),
-    db: AsyncSession = Depends(get_db),
+    db=Depends(get_db),
 ):
-    """Redirection de clic — enregistre le clic puis redirige."""
+    """Redirection de clic — enregistre le clic + met à jour le score (+10)."""
     try:
-        service = CampaignService(db)
-        await service.record_event(
-            campaign_id=campaign_id,
-            contact_id=contact_id,
-            event_type=EventType.CLICKED,
-            url_clicked=url,
-        )
+        await _record_event(db, campaign_id, contact_id, EventType.CLICKED, url_clicked=url)
     except Exception:
         pass
     return RedirectResponse(url=url)
+
+
+@router.post("/unsubscribe/{campaign_id}/{contact_id}")
+async def track_unsubscribe(
+    campaign_id: str,
+    contact_id: str,
+    db=Depends(get_db),
+):
+    """Désinscription — enregistre + met à jour le score (-20)."""
+    try:
+        await _record_event(db, campaign_id, contact_id, EventType.UNSUBSCRIBED)
+
+        # Mettre le contact en statut UNSUBSCRIBED
+        await db.execute(
+            text("UPDATE contacts SET status = 'UNSUBSCRIBED' WHERE id = :id"),
+            {"id": str(contact_id)}
+        )
+        await db.flush()
+    except Exception as e:
+        logger.warning("Failed to process unsubscribe: %s", str(e))
+
+    return {"status": "unsubscribed", "message": "Vous avez été désinscrit."}
+
+
+@router.get("/scores/summary")
+async def get_scoring_summary(
+    db=Depends(get_db),
+):
+    """Résumé du scoring — distribution des contacts par lead_stage."""
+    try:
+        result = await db.execute(text(
+            "SELECT lead_stage, COUNT(*) as cnt, AVG(lead_score) as avg_score "
+            "FROM contacts GROUP BY lead_stage"
+        ))
+        rows = result.fetchall()
+        return {
+            "stages": [
+                {"stage": row[0], "count": row[1], "avg_score": round(row[2] or 0, 1)}
+                for row in rows
+            ],
+            "rules": {k.value: v for k, v in SCORE_RULES.items()},
+        }
+    except Exception as e:
+        return {"error": str(e)}
