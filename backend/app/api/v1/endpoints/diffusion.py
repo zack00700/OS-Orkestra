@@ -22,6 +22,9 @@ logger = logging.getLogger("orkestra.diffusion")
 
 router = APIRouter(prefix="/diffusion", tags=["Diffusion"])
 
+# Whitelist des colonnes autorisées pour les filtres (anti SQL injection)
+ALLOWED_FILTER_COLUMNS = {"country", "city", "company", "segment", "source", "status", "lead_stage", "business_unit"}
+
 
 # ══════════════════════════════════════════════════════════
 # SCHEMAS
@@ -196,8 +199,10 @@ async def launch_campaign(
     if not campaign:
         raise HTTPException(status_code=404, detail="Campagne non trouvée")
 
-    if campaign.status not in (CampaignStatus.DRAFT, CampaignStatus.SCHEDULED):
-        raise HTTPException(status_code=400, detail=f"Campagne en statut {campaign.status} — ne peut pas être lancée")
+    # Vérifier le statut (comparaison insensible à la casse pour gérer UPPER en DB)
+    status_str = campaign.status.value if hasattr(campaign.status, 'value') else str(campaign.status)
+    if status_str.upper() not in ("DRAFT", "SCHEDULED"):
+        raise HTTPException(status_code=400, detail=f"Campagne en statut {status_str} — ne peut pas être lancée")
 
     # Récupérer le template
     template_html = "<html><body><h2>{{subject}}</h2><p>Bonjour {{first_name}},</p><p>Ce message vous est envoyé par {{from_name}}.</p></body></html>"
@@ -209,32 +214,8 @@ async def launch_campaign(
             template_html = tpl.html_content
             template_text = tpl.text_content or ""
 
-    # Récupérer les contacts
-    if campaign.segment_id:
-        # Contacts du segment
-        seg_result = await db.execute(select(Segment).where(Segment.id == campaign.segment_id))
-        seg = seg_result.scalar_one_or_none()
-        if seg:
-            criteria = seg.filter_criteria
-            if isinstance(criteria, str):
-                try:
-                    criteria = json.loads(criteria)
-                except Exception:
-                    criteria = {}
-            where_parts = []
-            for k, v in (criteria or {}).items():
-                if k in ("country", "city", "company", "source", "status"):
-                    where_parts.append(f"{k} = '{v}'")
-            where_sql = " WHERE " + " AND ".join(where_parts) if where_parts else ""
-        else:
-            where_sql = ""
-    else:
-        where_sql = ""
-
-    contacts_result = await db.execute(text(
-        f"SELECT id, email, first_name, last_name, company FROM contacts{where_sql}"
-    ))
-    contacts = contacts_result.fetchall()
+    # Récupérer les contacts du segment (avec requêtes paramétrées)
+    contacts = await _get_segment_contacts(db, campaign.segment_id)
 
     if not contacts:
         raise HTTPException(status_code=400, detail="Aucun contact dans le segment ciblé")
@@ -270,7 +251,7 @@ async def launch_campaign(
         txt = txt.replace("{{company}}", company)
 
         # Envoyer
-        result = _send_email(
+        send_result = _send_email(
             to_email=email,
             subject=subject,
             html_content=html,
@@ -280,9 +261,9 @@ async def launch_campaign(
             from_name=from_name,
         )
 
-        if result.get("success"):
+        if send_result.get("success"):
             stats["sent"] += 1
-            # Enregistrer l'événement SENT
+            # Enregistrer les événements
             db.add(CampaignEvent(
                 id=str(uuid.uuid4()),
                 campaign_id=str(campaign.id),
@@ -290,7 +271,6 @@ async def launch_campaign(
                 event_type=EventType.SENT,
                 timestamp=datetime.now(timezone.utc),
             ))
-            # Enregistrer DELIVERED (on assume livré si pas d'erreur SMTP)
             db.add(CampaignEvent(
                 id=str(uuid.uuid4()),
                 campaign_id=str(campaign.id),
@@ -300,11 +280,11 @@ async def launch_campaign(
             ))
         else:
             stats["errors"] += 1
-            logger.warning(f"Email failed for {email}: {result.get('message')}")
+            logger.warning(f"Email failed for {email}: {send_result.get('message')}")
 
     # Mettre à jour les compteurs
     campaign.total_sent = stats["sent"]
-    campaign.total_delivered = stats["sent"]  # On assume livré
+    campaign.total_delivered = stats["sent"]
     campaign.total_bounced = stats["errors"]
     if stats["errors"] == 0:
         campaign.status = CampaignStatus.COMPLETED
@@ -322,8 +302,61 @@ async def launch_campaign(
 
 
 # ══════════════════════════════════════════════════════════
-# HELPER SMTP
+# HELPERS
 # ══════════════════════════════════════════════════════════
+
+async def _get_segment_contacts(db, segment_id) -> list:
+    """Récupère les contacts d'un segment avec des requêtes sécurisées."""
+    if not segment_id:
+        # Pas de segment → tous les contacts
+        result = await db.execute(text(
+            "SELECT id, email, first_name, last_name, company FROM contacts"
+        ))
+        return result.fetchall()
+
+    # Récupérer le segment et ses filtres
+    seg_result = await db.execute(select(Segment).where(Segment.id == segment_id))
+    seg = seg_result.scalar_one_or_none()
+    if not seg:
+        return []
+
+    criteria = seg.filter_criteria
+    if isinstance(criteria, str):
+        try:
+            criteria = json.loads(criteria)
+        except Exception:
+            criteria = {}
+
+    if not criteria:
+        result = await db.execute(text(
+            "SELECT id, email, first_name, last_name, company FROM contacts"
+        ))
+        return result.fetchall()
+
+    # Construire la requête avec des paramètres bindés (anti SQL injection)
+    where_parts = []
+    params = {}
+    param_idx = 0
+    for k, v in criteria.items():
+        if k in ALLOWED_FILTER_COLUMNS:
+            param_name = f"p{param_idx}"
+            where_parts.append(f"{k} = :{param_name}")
+            params[param_name] = str(v)
+            param_idx += 1
+
+    if not where_parts:
+        result = await db.execute(text(
+            "SELECT id, email, first_name, last_name, company FROM contacts"
+        ))
+        return result.fetchall()
+
+    where_sql = " WHERE " + " AND ".join(where_parts)
+    result = await db.execute(
+        text(f"SELECT id, email, first_name, last_name, company FROM contacts{where_sql}"),
+        params,
+    )
+    return result.fetchall()
+
 
 def _send_email(
     to_email: str,
