@@ -1,14 +1,14 @@
 """
 OS Orkestra — Configuration des tests
-Utilise SQLite en mémoire pour les tests (pas besoin de SQL Server)
+Utilise SQLite in-memory pour les tests (pas besoin de SQL Server)
 """
 import os
 import pytest
 import asyncio
 from typing import AsyncGenerator
 
-# Forcer SQLite pour les tests AVANT d'importer quoi que ce soit
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test.db"
+# Forcer SQLite in-memory pour les tests AVANT d'importer quoi que ce soit
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite://"
 os.environ["ENVIRONMENT"] = "test"
 os.environ["JWT_SECRET_KEY"] = "test-secret-key"
 os.environ["SECRET_KEY"] = "test-secret-key"
@@ -16,6 +16,7 @@ os.environ["ALLOWED_ORIGINS"] = '["*"]'
 
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.pool import StaticPool
 from sqlalchemy import event
 
 from app.main import app
@@ -23,10 +24,13 @@ from app.core.database import Base, get_db
 from app.core.security import hash_password
 
 
-# ── Test Database ────────────────────────────────────
-TEST_DATABASE_URL = "sqlite+aiosqlite:///./test.db"
-
-test_engine = create_async_engine(TEST_DATABASE_URL, echo=False)
+# ── Test Database (in-memory, shared via StaticPool) ──
+test_engine = create_async_engine(
+    "sqlite+aiosqlite://",
+    echo=False,
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
 test_session_factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -69,9 +73,6 @@ async def setup_database():
     yield
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
-    # Supprimer le fichier test.db
-    if os.path.exists("./test.db"):
-        os.remove("./test.db")
 
 
 @pytest.fixture
