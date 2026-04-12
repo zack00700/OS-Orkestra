@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from "recharts";
-import { Search, Users, Mail, BarChart3, Zap, Send, Eye, MousePointerClick, RefreshCw, Filter, Plus, LayoutDashboard, Target, Database, Link2, LogOut, ChevronLeft, ChevronRight, X, Calendar, FileText, ArrowUpRight, ArrowDownRight, Layers } from "lucide-react";
+import { Search, Users, Mail, BarChart3, Zap, Send, Eye, MousePointerClick, RefreshCw, Filter, Plus, LayoutDashboard, Target, Database, Link2, LogOut, ChevronLeft, ChevronRight, X, Calendar, FileText, ArrowUpRight, ArrowDownRight, Layers, Radio } from "lucide-react";
 
 const API = window.location.hostname === "localhost"
   ? "http://localhost:8000/api/v1"
@@ -254,7 +254,7 @@ function CampaignsPage() {
 
   const launchCampaign = async (id) => {
     if (!confirm("Lancer cette campagne ?")) return;
-    try { await api(`/campaigns/${id}/launch`, { method: "POST" }); load(); } catch (err) { alert("Erreur: " + err.message); }
+    try { await api('/diffusion/launch-campaign', { method: 'POST', body: JSON.stringify({ campaign_id: id }) }); load(); } catch (err) { alert("Erreur: " + err.message); }
   };
 
   const loadDetail = async (id) => {
@@ -900,6 +900,148 @@ function MappingPage() {
 }
 
 
+
+// ══════════════════════════════════════════════════════════
+// DIFFUSION PAGE
+// ══════════════════════════════════════════════════════════
+
+function DiffusionPage() {
+  const [config, setConfig] = useState({ smtp: {}, whatsapp: {}, sms: {} });
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState("email");
+  const [smtpForm, setSmtpForm] = useState({ host: "smtp.gmail.com", port: 587, username: "", password: "", use_tls: true, from_email: "", from_name: "OS Orkestra" });
+  const [whatsappForm, setWhatsappForm] = useState({ api_token: "", phone_number_id: "" });
+  const [smsForm, setSmsForm] = useState({ provider: "twilio", api_key: "", api_secret: "", from_number: "" });
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [testEmail, setTestEmail] = useState("");
+  const [sendingTest, setSendingTest] = useState(false);
+  const [sendResult, setSendResult] = useState(null);
+
+  useEffect(() => { api("/diffusion/config").then(d => { setConfig(d || {}); setLoading(false); }).catch(() => setLoading(false)); }, []);
+
+  const saveSmtp = async () => {
+    setSaving(true); setTestResult(null);
+    try { await api("/diffusion/config/smtp", { method: "POST", body: JSON.stringify(smtpForm) }); setTestResult({ success: true, message: "Configuration SMTP sauvegardée" }); }
+    catch (err) { setTestResult({ success: false, message: err.message }); }
+    setSaving(false);
+  };
+
+  const testSmtp = async () => {
+    setTesting(true); setTestResult(null);
+    try { const r = await api("/diffusion/test-smtp", { method: "POST" }); setTestResult(r); }
+    catch (err) { setTestResult({ success: false, message: err.message }); }
+    setTesting(false);
+  };
+
+  const sendTestEmail = async () => {
+    if (!testEmail) return alert("Entrez un email");
+    setSendingTest(true); setSendResult(null);
+    try {
+      const r = await api("/diffusion/send-test-email", { method: "POST", body: JSON.stringify({ to_email: testEmail, subject: "Test OS Orkestra", body: "Ceci est un email de test. Si vous le recevez, la configuration SMTP fonctionne !" }) });
+      setSendResult(r);
+    } catch (err) { setSendResult({ success: false, message: err.message }); }
+    setSendingTest(false);
+  };
+
+  const saveWhatsapp = async () => {
+    setSaving(true);
+    try { await api("/diffusion/config/whatsapp", { method: "POST", body: JSON.stringify(whatsappForm) }); alert("WhatsApp configuré"); }
+    catch (err) { alert("Erreur: " + err.message); }
+    setSaving(false);
+  };
+
+  const saveSms = async () => {
+    setSaving(true);
+    try { await api("/diffusion/config/sms", { method: "POST", body: JSON.stringify(smsForm) }); alert("SMS configuré"); }
+    catch (err) { alert("Erreur: " + err.message); }
+    setSaving(false);
+  };
+
+  const tabs = [
+    { id: "email", label: "Email (SMTP)", icon: Mail, color: "text-sky-600 bg-sky-50" },
+    { id: "whatsapp", label: "WhatsApp", icon: Send, color: "text-green-600 bg-green-50" },
+    { id: "sms", label: "SMS", icon: Radio, color: "text-amber-600 bg-amber-50" },
+  ];
+
+  return (
+    <div className="p-8">
+      <div className="mb-6"><h2 className="text-xl font-bold text-slate-900">Diffusion</h2><p className="text-sm text-slate-400 mt-1">Configurez vos canaux d'envoi</p></div>
+
+      <div className="flex gap-3 mb-6">{tabs.map(t => { const Icon = t.icon; return (
+        <button key={t.id} onClick={() => { setActiveTab(t.id); setTestResult(null); setSendResult(null); }} className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${activeTab === t.id ? "bg-slate-900 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
+          <Icon size={16}/>{t.label}
+          {config[t.id === "email" ? "smtp" : t.id]?.status === "connected" && <span className="w-2 h-2 rounded-full bg-emerald-400"/>}
+        </button>);})}</div>
+
+      {activeTab === "email" && (
+        <div className="bg-white rounded-2xl border border-slate-100 p-6 max-w-2xl">
+          <h3 className="text-base font-bold text-slate-900 mb-4">Configuration SMTP</h3>
+          <div className="space-y-4">
+            <div className="grid grid-cols-3 gap-4">
+              <div className="col-span-2"><label className="text-sm font-medium text-slate-700 mb-1 block">Serveur SMTP</label><input value={smtpForm.host} onChange={e => setSmtpForm({...smtpForm, host: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+              <div><label className="text-sm font-medium text-slate-700 mb-1 block">Port</label><input type="number" value={smtpForm.port} onChange={e => setSmtpForm({...smtpForm, port: parseInt(e.target.value)})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><label className="text-sm font-medium text-slate-700 mb-1 block">Email / Login</label><input value={smtpForm.username} onChange={e => setSmtpForm({...smtpForm, username: e.target.value})} placeholder="votre@gmail.com" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+              <div><label className="text-sm font-medium text-slate-700 mb-1 block">Mot de passe / App Password</label><input type="password" value={smtpForm.password} onChange={e => setSmtpForm({...smtpForm, password: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><label className="text-sm font-medium text-slate-700 mb-1 block">Email expéditeur</label><input value={smtpForm.from_email} onChange={e => setSmtpForm({...smtpForm, from_email: e.target.value})} placeholder="noreply@opensid.com" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+              <div><label className="text-sm font-medium text-slate-700 mb-1 block">Nom expéditeur</label><input value={smtpForm.from_name} onChange={e => setSmtpForm({...smtpForm, from_name: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+            </div>
+            <div className="flex items-center gap-2"><input type="checkbox" checked={smtpForm.use_tls} onChange={e => setSmtpForm({...smtpForm, use_tls: e.target.checked})} className="rounded" /><label className="text-sm text-slate-600">Utiliser TLS (recommandé)</label></div>
+
+            {testResult && <div className={`rounded-xl p-3 text-sm ${testResult.success ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"}`}>{testResult.success ? "✓ " : "✗ "}{testResult.message}</div>}
+
+            <div className="flex gap-3">
+              <button onClick={saveSmtp} disabled={saving} className="px-5 py-2.5 bg-slate-900 text-white rounded-xl text-sm font-medium hover:bg-slate-800 disabled:opacity-50">{saving ? "..." : "Sauvegarder"}</button>
+              <button onClick={testSmtp} disabled={testing} className="px-5 py-2.5 border border-slate-200 text-slate-700 rounded-xl text-sm font-medium hover:bg-slate-50 disabled:opacity-50">{testing ? "Test..." : "Tester la connexion"}</button>
+            </div>
+
+            <div className="border-t border-slate-100 pt-4 mt-4">
+              <h4 className="text-sm font-bold text-slate-700 mb-3">Envoyer un email de test</h4>
+              <div className="flex gap-3">
+                <input value={testEmail} onChange={e => setTestEmail(e.target.value)} placeholder="votre@email.com" className="flex-1 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" />
+                <button onClick={sendTestEmail} disabled={sendingTest} className="px-5 py-2.5 bg-sky-600 text-white rounded-xl text-sm font-medium hover:bg-sky-500 disabled:opacity-50">{sendingTest ? "Envoi..." : "Envoyer"}</button>
+              </div>
+              {sendResult && <div className={`rounded-xl p-3 text-sm mt-3 ${sendResult.success ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"}`}>{sendResult.success ? "✓ " : "✗ "}{sendResult.message}</div>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "whatsapp" && (
+        <div className="bg-white rounded-2xl border border-slate-100 p-6 max-w-2xl">
+          <h3 className="text-base font-bold text-slate-900 mb-4">WhatsApp Business API</h3>
+          <p className="text-sm text-slate-400 mb-4">Nécessite un compte Meta Business avec l'API WhatsApp activée.</p>
+          <div className="space-y-4">
+            <div><label className="text-sm font-medium text-slate-700 mb-1 block">API Token (Meta)</label><input type="password" value={whatsappForm.api_token} onChange={e => setWhatsappForm({...whatsappForm, api_token: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+            <div><label className="text-sm font-medium text-slate-700 mb-1 block">Phone Number ID</label><input value={whatsappForm.phone_number_id} onChange={e => setWhatsappForm({...whatsappForm, phone_number_id: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+            <button onClick={saveWhatsapp} disabled={saving} className="px-5 py-2.5 bg-green-600 text-white rounded-xl text-sm font-medium hover:bg-green-500 disabled:opacity-50">{saving ? "..." : "Sauvegarder"}</button>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "sms" && (
+        <div className="bg-white rounded-2xl border border-slate-100 p-6 max-w-2xl">
+          <h3 className="text-base font-bold text-slate-900 mb-4">Configuration SMS</h3>
+          <div className="space-y-4">
+            <div><label className="text-sm font-medium text-slate-700 mb-1 block">Fournisseur</label><select value={smsForm.provider} onChange={e => setSmsForm({...smsForm, provider: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400"><option value="twilio">Twilio</option><option value="vonage">Vonage</option></select></div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><label className="text-sm font-medium text-slate-700 mb-1 block">API Key</label><input type="password" value={smsForm.api_key} onChange={e => setSmsForm({...smsForm, api_key: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+              <div><label className="text-sm font-medium text-slate-700 mb-1 block">API Secret</label><input type="password" value={smsForm.api_secret} onChange={e => setSmsForm({...smsForm, api_secret: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+            </div>
+            <div><label className="text-sm font-medium text-slate-700 mb-1 block">Numéro expéditeur</label><input value={smsForm.from_number} onChange={e => setSmsForm({...smsForm, from_number: e.target.value})} placeholder="+33612345678" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+            <button onClick={saveSms} disabled={saving} className="px-5 py-2.5 bg-amber-600 text-white rounded-xl text-sm font-medium hover:bg-amber-500 disabled:opacity-50">{saving ? "..." : "Sauvegarder"}</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ══════════════════════════════════════════════════════════
 // MAIN APP
 // ══════════════════════════════════════════════════════════
@@ -916,10 +1058,11 @@ export default function App() {
     { id: "segments", label: "Segments", icon: Target },
     { id: "analytics", label: "Analytics", icon: BarChart3 },
     { id: "mapping", label: "Mapping", icon: Layers },
+    { id: "diffusion", label: "Diffusion", icon: Radio },
     { id: "integrations", label: "Intégrations", icon: Link2 },
   ];
 
-  const pages = { dashboard: DashboardPage, contacts: ContactsPage, campaigns: CampaignsPage, segments: SegmentsPage, analytics: AnalyticsPage, integrations: IntegrationsPage, mapping: MappingPage };
+  const pages = { dashboard: DashboardPage, contacts: ContactsPage, campaigns: CampaignsPage, segments: SegmentsPage, analytics: AnalyticsPage, integrations: IntegrationsPage, mapping: MappingPage, diffusion: DiffusionPage };
   const Page = pages[activeNav];
 
   return (
