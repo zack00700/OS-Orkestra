@@ -91,7 +91,7 @@ def send_whatsapp_campaign(self, campaign_id: str):
     from app.integrations.whatsapp.connector import WhatsAppConnector
 
     async def _send():
-        connector = WhatsAppConnector()
+        _connector = WhatsAppConnector()  # noqa: F841
         # TODO: charger contacts et envoyer
         return {"campaign_id": campaign_id, "status": "completed"}
 

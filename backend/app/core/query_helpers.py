@@ -24,7 +24,7 @@ from app.core.database import get_dialect, get_capabilities, DatabaseDialect
 def case_insensitive_like(column, value: str) -> ClauseElement:
     """
     Recherche case-insensitive portable.
-    
+
     PostgreSQL  : column ILIKE '%value%'
     SQL Server  : column LIKE '%value%' (case-insensitive par défaut avec collation CI)
     MySQL       : column LIKE '%value%' (case-insensitive par défaut)
@@ -64,7 +64,7 @@ def case_insensitive_equals(column, value: str) -> ClauseElement:
 def array_contains(column, value: str) -> ClauseElement:
     """
     Vérifie si un array contient une valeur spécifique.
-    
+
     PostgreSQL  : column @> ARRAY['value']
     SQL Server  : column LIKE '%"value"%'  (JSON sérialisé dans NVARCHAR)
     MySQL       : JSON_CONTAINS(column, '"value"')
@@ -88,7 +88,7 @@ def array_contains(column, value: str) -> ClauseElement:
 def array_overlap(column, values: list[str]) -> ClauseElement:
     """
     Vérifie si un array a au moins une valeur en commun (OR).
-    
+
     PostgreSQL  : column && ARRAY['a','b']
     Autres      : column LIKE '%"a"%' OR column LIKE '%"b"%'
     """
@@ -128,7 +128,7 @@ def array_length(column) -> ClauseElement:
 def json_extract_text(column, key: str) -> ClauseElement:
     """
     Extraire une valeur texte d'un champ JSON.
-    
+
     PostgreSQL  : column->>'key'
     SQL Server  : JSON_VALUE(column, '$.key')
     MySQL       : JSON_UNQUOTE(JSON_EXTRACT(column, '$.key'))
@@ -178,7 +178,7 @@ def build_raw_paginated_query(
     """
     Construit une requête paginée en raw SQL selon le dialecte.
     Pour les cas où SQLAlchemy ORM n'est pas utilisé (requêtes complexes).
-    
+
     Note : Préférer .limit().offset() de SQLAlchemy ORM qui traduit automatiquement.
     Ce helper est pour le raw SQL uniquement.
     """
@@ -217,7 +217,7 @@ def compute_batch_size(columns_per_row: int) -> int:
     """
     Calcule la taille de batch optimale pour les INSERT en masse
     en respectant la limite de paramètres du moteur.
-    
+
     SQL Server : max 2100 params → 2100 / nb_colonnes
     SQLite     : max 999 params  → 999 / nb_colonnes
     PG/MySQL   : plus souple, on chunk par 500 pour la mémoire

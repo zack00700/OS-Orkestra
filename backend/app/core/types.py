@@ -15,7 +15,7 @@ Résout les incompatibilités entre moteurs SQL :
 
 Usage :
     from app.core.types import GUID, ArrayField, JSONField
-    
+
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     tags: Mapped[list[str] | None] = mapped_column(ArrayField(), nullable=True)
     config: Mapped[dict] = mapped_column(JSONField(), default=dict)
@@ -85,7 +85,7 @@ class ArrayField(TypeDecorator):
     Liste de valeurs portable :
     - PostgreSQL → ARRAY natif
     - Autres → JSON sérialisé (TEXT sur SQLite, NVARCHAR(MAX) sur SQL Server)
-    
+
     Supporte les opérations de filtrage cross-DB via les méthodes helper.
     """
     impl = Text

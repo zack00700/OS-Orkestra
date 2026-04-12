@@ -23,7 +23,7 @@ async def list_templates(
     current_user: dict = Depends(get_current_user),
 ):
     result = await db.execute(
-        select(Template).where(Template.is_active == True).order_by(Template.name)
+        select(Template).where(Template.is_active.is_(True)).order_by(Template.name)
     )
     templates = result.scalars().all()
     return [
