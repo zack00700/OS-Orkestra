@@ -1,196 +1,21 @@
-# OS HubLine
+# OS Orkestra
 
 **Marketing Automation & Campaign Management Platform — by OpenSID**
 
----
-
-## Installation rapide (Mac + SQL Server)
-
-### Prérequis
-
-- Python 3.11+ (`python3 --version`)
-- Docker Desktop avec un conteneur SQL Server qui tourne
-- Node.js 18+ (`node --version`) — pour le frontend
-
-### Lancer l'installation
-
-```bash
-# 1. Dézipper le projet
-cd ~/Desktop
-tar -xzf ~/Downloads/os-hubline-complet.tar.gz
-cd os-hubline
-
-# 2. Lancer le script d'installation
-./setup.sh
-```
-
-**Le script fait tout automatiquement :**
-
-1. Vérifie que Python, Node et Docker sont installés
-2. Détecte ton conteneur SQL Server
-3. Te demande le mot de passe SA et le nom de la base
-4. Installe les drivers ODBC Microsoft pour Mac (unixodbc + msodbcsql18)
-5. Crée la base `hubline` + un utilisateur dédié dans SQL Server
-6. Génère le fichier `.env` avec la bonne connexion
-7. Crée l'environnement Python et installe toutes les dépendances
-8. Installe les dépendances frontend (npm install)
-9. Te propose de lancer le backend directement
-
-### Lancer manuellement (après setup)
-
-```bash
-# Terminal 1 — Backend
-cd os-hubline/backend
-source venv/bin/activate
-uvicorn app.main:app --reload --port 8000
-
-# Terminal 2 — Frontend
-cd os-hubline/frontend
-npm run dev
-```
-
-### Accès
-
-| Quoi | URL |
-|------|-----|
-| Dashboard | http://localhost:3000 |
-| API Docs (Swagger) | http://localhost:8000/docs |
-| API Docs (Redoc) | http://localhost:8000/redoc |
-| Health check | http://localhost:8000/health |
+🔗 **Live** : [https://os-orkestra.onrender.com](https://os-orkestra.onrender.com)
 
 ---
 
-## Structure du projet
+## Présentation
 
-```
-os-hubline/
-│
-├── setup.sh                     ← LANCER EN PREMIER — installe tout
-│
-├── backend/                     ← API Python (FastAPI)
-│   ├── .env                     ← Config (créé par setup.sh)
-│   ├── .env.example             ← Modèle de config
-│   ├── requirements.txt         ← Dépendances Python
-│   ├── Dockerfile
-│   └── app/
-│       ├── main.py              ← Point d'entrée
-│       ├── core/
-│       │   ├── config.py        ← Configuration centralisée
-│       │   ├── database.py      ← Connexion multi-DB (PG, SQL Server, MySQL, SQLite, Oracle)
-│       │   ├── types.py         ← Types SQL portables (GUID, JSON, Array)
-│       │   ├── query_helpers.py ← Requêtes cross-DB (ILIKE/LIKE, pagination, etc.)
-│       │   └── security.py      ← JWT, auth, rôles
-│       ├── models/models.py     ← Modèles de données (Contact, Campaign, etc.)
-│       ├── schemas/schemas.py   ← Validation API (Pydantic)
-│       ├── services/            ← Logique métier
-│       ├── api/v1/endpoints/    ← Routes REST (auth, contacts, campagnes, intégrations)
-│       ├── integrations/        ← Connecteurs CRM Dynamics, Azure AD, WhatsApp
-│       └── tasks/               ← Tâches async (sync, envois)
-│
-├── frontend/                    ← Dashboard React
-│   ├── package.json
-│   ├── vite.config.js
-│   └── src/App.jsx              ← Dashboard principal
-│
-└── docker-compose.yml           ← Stack Docker complète (optionnel)
-```
+OS Orkestra est un outil de marketing automation qui remplace Oracle Eloqua. Il permet de :
 
----
-
-## Bases de données supportées
-
-Le projet est **agnostique** : un seul code, toutes les bases.
-Il suffit de changer `DATABASE_URL` dans `backend/.env`.
-
-| Moteur | DATABASE_URL | Ce qui s'adapte automatiquement |
-|--------|-------------|-------------------------------|
-| **SQL Server** | `mssql://user:pass@host:1433/db` | UNIQUEIDENTIFIER, NVARCHAR(MAX), OFFSET FETCH, LIKE |
-| PostgreSQL | `postgresql://user:pass@host:5432/db` | UUID natif, JSONB, ARRAY, ILIKE, LIMIT/OFFSET |
-| MySQL | `mysql://user:pass@host:3306/db` | CHAR(36), JSON, JSON_CONTAINS, LIMIT/OFFSET |
-| SQLite | `sqlite:///./fichier.db` | CHAR(36), TEXT+JSON, LOWER()+LIKE, LIMIT/OFFSET |
-| Oracle | `oracle://user:pass@host:1521/svc` | RAW(16), CLOB, JSON_VALUE, OFFSET FETCH |
-
-### Ce qui change automatiquement entre les moteurs
-
-| Fonctionnalité | PostgreSQL | SQL Server | MySQL | SQLite |
-|---------------|-----------|------------|-------|--------|
-| UUID | UUID natif | UNIQUEIDENTIFIER | CHAR(36) | CHAR(36) |
-| Tableaux (tags) | ARRAY | NVARCHAR(MAX) JSON | JSON | TEXT JSON |
-| Champs JSON | JSONB | NVARCHAR(MAX) | JSON | TEXT |
-| Texte long | TEXT | NVARCHAR(MAX) | LONGTEXT | TEXT |
-| Recherche texte | ILIKE | LIKE (CI par défaut) | LIKE (CI) | LOWER()+LIKE |
-| Pagination | LIMIT/OFFSET | OFFSET FETCH | LIMIT/OFFSET | LIMIT/OFFSET |
-| Enums | ENUM natif | VARCHAR | VARCHAR | VARCHAR |
-| Limite params | 32 767 | 2 100 | 65 535 | 999 |
-
----
-
-## API — Endpoints principaux
-
-### Auth
-- `POST /api/v1/auth/register` — Créer un compte
-- `POST /api/v1/auth/login` — Se connecter (retourne un JWT)
-- `GET /api/v1/auth/me` — Profil utilisateur connecté
-
-### Contacts
-- `GET /api/v1/contacts/` — Liste paginée + filtres (recherche, statut, segment, pays...)
-- `POST /api/v1/contacts/` — Créer un contact
-- `PATCH /api/v1/contacts/{id}` — Modifier
-- `DELETE /api/v1/contacts/{id}` — Supprimer (RGPD)
-- `POST /api/v1/contacts/bulk-import` — Import en masse
-- `GET /api/v1/contacts/stats` — Statistiques globales
-
-### Campagnes
-- `GET /api/v1/campaigns/` — Liste des campagnes
-- `POST /api/v1/campaigns/` — Créer une campagne
-- `POST /api/v1/campaigns/{id}/launch` — Lancer
-- `POST /api/v1/campaigns/{id}/pause` — Mettre en pause
-- `GET /api/v1/campaigns/{id}/analytics` — KPIs détaillés
-- `GET /api/v1/campaigns/dashboard` — Stats globales dashboard
-
-### Intégrations
-- `GET /api/v1/integrations/test/dynamics` — Tester la connexion Dynamics
-- `GET /api/v1/integrations/test/azure-ad` — Tester Azure AD
-- `POST /api/v1/integrations/sync/dynamics` — Lancer une sync CRM
-- `POST /api/v1/integrations/sync/azure-ad` — Lancer une sync annuaire
-
----
-
-## Commandes utiles
-
-| Action | Commande |
-|--------|----------|
-| Lancer le backend | `cd backend && source venv/bin/activate && uvicorn app.main:app --reload` |
-| Lancer le frontend | `cd frontend && npm run dev` |
-| Doc API interactive | http://localhost:8000/docs |
-| Dashboard | http://localhost:3000 |
-| Vérifier la DB | http://localhost:8000/health |
-| Arrêter un serveur | `Ctrl + C` |
-
----
-
-## En cas de problème
-
-### "pyodbc.OperationalError: ... Can't open lib 'ODBC Driver 18 for SQL Server'"
-Le driver ODBC n'est pas installé. Lance :
-```bash
-brew tap microsoft/mssql-release https://github.com/Microsoft/homebrew-mssql-release
-HOMEBREW_ACCEPT_EULA=Y brew install msodbcsql18
-```
-
-### "Login failed for user"
-Vérifie le mot de passe dans `backend/.env` → ligne `DATABASE_URL`.
-
-### "ModuleNotFoundError"
-```bash
-cd backend && source venv/bin/activate && pip install <module_manquant>
-```
-
-### "Port 8000 already in use"
-```bash
-lsof -i :8000
-kill -9 <PID>
-```
+- **Importer** des contacts depuis des CRM / bases de données externes (SQL Server, PostgreSQL, MySQL)
+- **Segmenter** les contacts par critères dynamiques (pays, secteur, score...)
+- **Créer des campagnes** email, SMS et WhatsApp avec templates personnalisables
+- **Envoyer** des emails via SMTP avec personnalisation ({{first_name}}, {{company}})
+- **Tracker** les ouvertures et clics (pixel tracking + redirection)
+- **Analyser** les performances (taux d'ouverture, clic, délivrabilité, rebonds)
 
 ---
 
@@ -198,13 +23,218 @@ kill -9 <PID>
 
 | Composant | Technologie |
 |-----------|-------------|
-| API | FastAPI (Python 3.11) |
+| Backend | FastAPI (Python 3.9+) |
 | ORM | SQLAlchemy 2.0 (multi-DB) |
-| Auth | JWT + bcrypt + RBAC |
-| Frontend | React 18 + Vite + Tailwind |
-| Charts | Recharts |
-| DB | SQL Server / PostgreSQL / MySQL / SQLite / Oracle |
+| Auth | JWT + PBKDF2 + RBAC (admin, manager, editor, viewer) |
+| Frontend | React 18 + Vite + Tailwind CSS |
+| Graphiques | Recharts |
+| Base interne | Azure SQL Server (pymssql) |
+| Déploiement | Render (single service — backend sert le frontend) |
 
 ---
 
-© 2026 OpenSID — Tous droits réservés
+## Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│                  OS Orkestra                      │
+│              (Render — single service)            │
+│                                                   │
+│  ┌──────────┐    ┌───────────────────────────┐   │
+│  │ React    │    │ FastAPI                    │   │
+│  │ Frontend │◄──►│ /api/v1/                   │   │
+│  │ (static) │    │ auth, contacts, campaigns  │   │
+│  └──────────┘    │ segments, analytics        │   │
+│                  │ mapping, diffusion         │   │
+│                  │ integrations, tracking     │   │
+│                  └─────────┬─────────────────┘   │
+│                            │                      │
+└────────────────────────────┼──────────────────────┘
+                             │
+                    ┌────────▼────────┐
+                    │  Azure SQL      │
+                    │  Orkestra (DB)  │
+                    │  osmdm-server   │
+                    └─────────────────┘
+                             ▲
+                    ┌────────┴────────┐
+                    │  CRM externe    │
+                    │  (import via    │
+                    │   Mapping)      │
+                    └─────────────────┘
+```
+
+---
+
+## Pages de l'application
+
+| Page | Description |
+|------|-------------|
+| **Dashboard** | KPIs temps réel, graphiques performance, funnel, sources |
+| **Contacts** | Liste paginée + recherche + ajout manuel |
+| **Campagnes** | Création (template + segment), lancement, détails analytics |
+| **Segments** | Segments dynamiques avec filtres, détail des contacts, création |
+| **Analytics** | Vue d'ensemble filtrable (7j/30j/90j), ranking campagnes |
+| **Mapping** | Import CRM en 5 étapes : connexion → table → mapping → preview → import |
+| **Diffusion** | Configuration SMTP, WhatsApp, SMS + envoi test + lancement campagnes |
+| **Intégrations** | Configuration des sources de données (DB, CRM, Azure AD) |
+
+---
+
+## Déploiement
+
+### Production (Render)
+
+L'application tourne sur Render en single service :
+- **URL** : https://os-orkestra.onrender.com
+- **Build** : compile le frontend React → copie dans `backend/frontend_dist/` → installe les deps Python
+- **Base** : Azure SQL `osmdm-server.database.windows.net` / `Orkestra`
+
+**Build Command** :
+```
+cd ../frontend && npm install && npm run build && cp -r dist ../backend/frontend_dist && cd ../backend && pip install --upgrade pip && pip install fastapi "uvicorn[standard]" "sqlalchemy[asyncio]" pydantic pydantic-settings pyjwt python-multipart httpx email-validator python-dotenv pymssql aiosqlite
+```
+
+**Start Command** :
+```
+uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+**Variables d'environnement** :
+```
+DATABASE_URL=mssql+pymssql://mdm-admin:***@osmdm-server.database.windows.net:1433/Orkestra
+ENVIRONMENT=production
+DEBUG=false
+JWT_SECRET_KEY=(generated)
+SECRET_KEY=(generated)
+ALLOWED_ORIGINS=["*"]
+```
+
+### Local (développement)
+
+```bash
+# Prérequis : Docker Desktop (SQL Server), Python 3.9+, Node.js 18+
+cd OS-Orkestra
+./start.sh
+
+# Dashboard : http://localhost:3000
+# API Docs  : http://localhost:8000/docs
+# Health    : http://localhost:8000/health
+```
+
+---
+
+## Structure du projet
+
+```
+OS-Orkestra/
+├── backend/
+│   ├── app/
+│   │   ├── main.py                      # FastAPI + sert le frontend buildé
+│   │   ├── core/
+│   │   │   ├── config.py                # Pydantic Settings
+│   │   │   ├── database.py              # Multi-DB + SyncSessionWrapper (pymssql)
+│   │   │   ├── security.py              # PBKDF2 hash + JWT
+│   │   │   ├── types.py                 # Types portables (GUID, JSON, Array)
+│   │   │   └── query_helpers.py         # Helpers cross-DB
+│   │   ├── models/models.py             # 10 modèles ORM
+│   │   ├── schemas/schemas.py           # Validation Pydantic
+│   │   ├── services/                    # Logique métier
+│   │   └── api/v1/endpoints/            # Tous les endpoints REST
+│   ├── seed.py                          # Données de test (local)
+│   └── fix_azure_passwords.py           # Fix passwords Azure
+├── frontend/
+│   ├── src/App.jsx                      # SPA complète (~1100 lignes)
+│   ├── package.json
+│   └── vite.config.js
+├── CLAUDE.md                            # Contexte projet pour Claude Code
+├── render.yaml                          # Config Render
+├── start.sh / stop.sh                   # Scripts dev local
+└── docker-compose.yml                   # Docker (dev local)
+```
+
+---
+
+## Bases de données supportées
+
+| Moteur | Driver | Usage |
+|--------|--------|-------|
+| **SQL Server** | pymssql (Render) / pyodbc (local) | Base interne + CRM externes |
+| PostgreSQL | asyncpg | Supporté (non utilisé actuellement) |
+| MySQL | aiomysql | Supporté |
+| SQLite | aiosqlite | Supporté (dev/test) |
+
+---
+
+## API — Endpoints principaux
+
+### Auth
+- `POST /api/v1/auth/login` — Connexion (retourne JWT)
+- `POST /api/v1/auth/register` — Créer un compte
+- `GET /api/v1/auth/me` — Profil utilisateur
+
+### Contacts
+- `GET /api/v1/contacts/` — Liste paginée + recherche
+- `POST /api/v1/contacts/` — Créer un contact
+- `GET /api/v1/contacts/stats` — Statistiques
+
+### Campagnes
+- `GET /api/v1/campaigns/` — Liste
+- `POST /api/v1/campaigns/` — Créer
+
+### Segments
+- `GET /api/v1/segments/` — Liste (comptage dynamique)
+- `GET /api/v1/segments/{id}/contacts` — Contacts du segment
+- `POST /api/v1/segments/` — Créer avec filtre
+
+### Analytics
+- `GET /api/v1/analytics/overview` — KPIs globaux
+- `GET /api/v1/analytics/campaigns/ranking` — Classement
+- `GET /api/v1/analytics/campaigns/{id}/detail` — Détail campagne
+
+### Mapping
+- `POST /api/v1/mapping/list-tables` — Tables d'une base externe
+- `POST /api/v1/mapping/table-schema` — Schéma + auto-suggest
+- `POST /api/v1/mapping/preview` — Prévisualiser le mapping
+- `POST /api/v1/mapping/import` — Lancer l'import
+
+### Diffusion
+- `POST /api/v1/diffusion/config/smtp` — Configurer SMTP
+- `POST /api/v1/diffusion/test-smtp` — Tester la connexion
+- `POST /api/v1/diffusion/send-test-email` — Envoyer un test
+- `POST /api/v1/diffusion/launch-campaign` — Lancer une campagne (envoi réel)
+
+---
+
+## Comptes de test
+
+| Email | Mot de passe | Rôle |
+|-------|-------------|------|
+| admin@opensid.com | Test1234 | Admin |
+| zack@opensid.com | Test1234 | Admin |
+| marketing@opensid.com | Test1234 | Manager |
+| commercial@opensid.com | Test1234 | Editor |
+| viewer@opensid.com | Test1234 | Viewer |
+
+---
+
+## Roadmap
+
+- [x] Import CRM via mapping visuel
+- [x] Segments dynamiques
+- [x] Création de campagnes
+- [x] Envoi réel d'emails (SMTP)
+- [x] Page Diffusion (config SMTP/WhatsApp/SMS)
+- [x] Ajout manuel de contacts
+- [ ] Envoi WhatsApp (Meta Business API)
+- [ ] CI/CD GitHub Actions + pytest
+- [ ] Scoring automatique basé sur les events
+- [ ] Éditeur de template email (drag-and-drop)
+- [ ] Automation workflows (scénarios)
+- [ ] Write-back CRM (sync bidirectionnelle)
+- [ ] Multi-tenant
+- [ ] RGPD (consentement, export, droit à l'oubli)
+
+---
+
+© 2026 OpenSID — OS Orkestra
