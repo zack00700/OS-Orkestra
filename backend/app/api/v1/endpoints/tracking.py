@@ -7,7 +7,8 @@ import uuid
 import logging
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, Query
+from urllib.parse import urlparse
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select, text
 from app.core.database import get_db
@@ -42,12 +43,12 @@ SCORE_RULES = {
 def _calculate_lead_stage(score: int) -> str:
     """Détermine le lead_stage basé sur le score."""
     if score >= 80:
-        return "PURCHASE"
+        return "purchase"
     elif score >= 50:
-        return "CONSIDERATION"
+        return "consideration"
     elif score >= 20:
-        return "INTEREST"
-    return "AWARENESS"
+        return "interest"
+    return "awareness"
 
 
 async def _update_contact_score(db, contact_id: str, event_type: EventType):
@@ -64,16 +65,15 @@ async def _update_contact_score(db, contact_id: str, event_type: EventType):
         if not contact:
             return
 
-        new_score = max(0, (contact.lead_score or 0) + delta)
+        old_score = contact.lead_score or 0
+        new_score = max(0, old_score + delta)
         new_stage = _calculate_lead_stage(new_score)
 
-        await db.execute(
-            text("UPDATE contacts SET lead_score = :score, lead_stage = :stage WHERE id = :id"),
-            {"score": new_score, "stage": new_stage, "id": contact_id}
-        )
+        contact.lead_score = new_score
+        contact.lead_stage = new_stage
         await db.flush()
         logger.info("Contact %s score updated: %d -> %d (%s), stage: %s",
-                     contact_id, contact.lead_score or 0, new_score, event_type.value, new_stage)
+                     contact_id, old_score, new_score, event_type.value, new_stage)
     except Exception as e:
         logger.warning("Failed to update score for contact %s: %s", contact_id, str(e))
 
@@ -141,6 +141,11 @@ async def track_click(
     db=Depends(get_db),
 ):
     """Redirection de clic — enregistre le clic + met à jour le score (+10)."""
+    # Validation anti Open Redirect
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="URL invalide")
+
     try:
         await _record_event(db, campaign_id, contact_id, EventType.CLICKED, url_clicked=url)
     except Exception:
@@ -158,12 +163,14 @@ async def track_unsubscribe(
     try:
         await _record_event(db, campaign_id, contact_id, EventType.UNSUBSCRIBED)
 
-        # Mettre le contact en statut UNSUBSCRIBED
-        await db.execute(
-            text("UPDATE contacts SET status = 'UNSUBSCRIBED' WHERE id = :id"),
-            {"id": str(contact_id)}
+        # Mettre le contact en statut unsubscribed
+        result = await db.execute(
+            select(Contact).where(Contact.id == str(contact_id))
         )
-        await db.flush()
+        contact = result.scalar_one_or_none()
+        if contact:
+            contact.status = "unsubscribed"
+            await db.flush()
     except Exception as e:
         logger.warning("Failed to process unsubscribe: %s", str(e))
 
