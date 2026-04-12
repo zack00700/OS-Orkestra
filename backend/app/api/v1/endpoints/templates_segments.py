@@ -8,6 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, text
 from app.core.database import get_db
+from app.core.query_helpers import build_raw_paginated_query
 from app.core.security import get_current_user, require_roles
 from app.models.models import Template, Segment, Contact
 from app.schemas.schemas import TemplateCreate, SegmentCreate
@@ -155,9 +156,9 @@ async def get_segment_contacts(
     count_result = await db.execute(text(count_sql))
     total = count_result.fetchone()[0]
 
-    # Paginated results
-    offset = (page - 1) * page_size
-    data_sql = f"SELECT id, email, first_name, last_name, company, country, city, phone, job_title, source, status, lead_stage, lead_score FROM contacts{where_clause} ORDER BY email OFFSET {offset} ROWS FETCH NEXT {page_size} ROWS ONLY"
+    # Paginated results (portable : LIMIT/OFFSET pour SQLite/PG, OFFSET FETCH pour SQL Server)
+    base_sql = f"SELECT id, email, first_name, last_name, company, country, city, phone, job_title, source, status, lead_stage, lead_score FROM contacts{where_clause}"
+    data_sql = build_raw_paginated_query(base_sql, page=page, page_size=page_size, order_by="email")
     data_result = await db.execute(text(data_sql))
     rows = data_result.fetchall()
 
