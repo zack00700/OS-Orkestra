@@ -197,22 +197,71 @@ function ContactsPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [newContact, setNewContact] = useState({ email: "", first_name: "", last_name: "", company: "", job_title: "", phone: "", country: "", city: "", source: "manual", is_internal: false, gdpr_consent: true });
+  const [adding, setAdding] = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true);
     try { const p = new URLSearchParams({ page, page_size: 20, sort_order: "desc" }); if (search) p.set("search", search); const d = await api(`/contacts/?${p}`); setContacts(d?.items || []); setTotal(d?.total || 0); setTotalPages(d?.total_pages || 1); } catch (e) { console.error(e); }
     setLoading(false);
   }, [page, search]);
   useEffect(() => { load(); }, [load]);
+
+  const handleAddContact = async (e) => {
+    e.preventDefault(); if (!newContact.email) return alert("Email requis");
+    setAdding(true);
+    try {
+      await api("/contacts/", { method: "POST", body: JSON.stringify(newContact) });
+      setShowAdd(false);
+      setNewContact({ email: "", first_name: "", last_name: "", company: "", job_title: "", phone: "", country: "", city: "", source: "manual", is_internal: false, gdpr_consent: true });
+      load();
+    } catch (err) { alert("Erreur: " + err.message); }
+    setAdding(false);
+  };
+
   return (
     <div className="p-8">
-      <div className="flex items-center justify-between mb-6"><div><h2 className="text-xl font-bold text-slate-900">Contacts</h2><p className="text-sm text-slate-400">{total.toLocaleString("fr-FR")} contacts</p></div>
-      <form onSubmit={e => { e.preventDefault(); setPage(1); load(); }} className="flex gap-2"><input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher..." className="px-4 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-sky-400 w-64" /><button type="submit" className="px-4 py-2 bg-slate-900 text-white rounded-xl text-sm"><Search size={16} /></button></form></div>
+      <div className="flex items-center justify-between mb-6">
+        <div><h2 className="text-xl font-bold text-slate-900">Contacts</h2><p className="text-sm text-slate-400">{total.toLocaleString("fr-FR")} contacts</p></div>
+        <div className="flex gap-3">
+          <form onSubmit={e => { e.preventDefault(); setPage(1); load(); }} className="flex gap-2"><input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher..." className="px-4 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-sky-400 w-64" /><button type="submit" className="px-4 py-2 bg-slate-900 text-white rounded-xl text-sm"><Search size={16} /></button></form>
+          <button onClick={() => setShowAdd(true)} className="flex items-center gap-2 px-4 py-2 bg-sky-600 text-white rounded-xl text-sm font-medium hover:bg-sky-500"><Plus size={16}/>Nouveau contact</button>
+        </div>
+      </div>
       <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
         <table className="w-full"><thead><tr className="border-b border-slate-100 bg-slate-50/50"><th className="text-left text-xs font-medium text-slate-400 p-4">Contact</th><th className="text-left text-xs font-medium text-slate-400 p-4">Entreprise</th><th className="text-left text-xs font-medium text-slate-400 p-4">Pays</th><th className="text-left text-xs font-medium text-slate-400 p-4">Source</th><th className="text-left text-xs font-medium text-slate-400 p-4">Étape</th><th className="text-right text-xs font-medium text-slate-400 p-4">Score</th></tr></thead>
         <tbody>{loading ? Array.from({ length: 8 }).map((_, i) => <tr key={i} className="border-b border-slate-50"><td colSpan={6} className="p-4"><div className="h-5 bg-slate-100 rounded animate-pulse" /></td></tr>) :
         contacts.map(c => (<tr key={c.id} className="border-b border-slate-50 hover:bg-slate-50/50"><td className="p-4"><div className="flex items-center gap-3"><div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-xs font-bold text-slate-600">{(c.first_name||"?")[0]}{(c.last_name||"?")[0]}</div><div><div className="text-sm font-medium text-slate-800">{c.first_name} {c.last_name}</div><div className="text-xs text-slate-400">{c.email}</div></div></div></td><td className="p-4 text-sm text-slate-600">{c.company||"—"}</td><td className="p-4 text-sm text-slate-600">{c.country||"—"}</td><td className="p-4"><span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">{(c.source||"").replace("ContactSource.","").replace("_"," ")}</span></td><td className="p-4 text-xs font-medium text-sky-600">{(c.lead_stage||"").replace("LeadStage.","")}</td><td className="p-4 text-right"><span className={`text-sm font-bold ${c.lead_score>=80?"text-emerald-600":c.lead_score>=50?"text-amber-600":"text-slate-500"}`}>{c.lead_score}</span></td></tr>))}</tbody></table>
         <div className="flex items-center justify-between p-4 border-t border-slate-100"><span className="text-sm text-slate-400">Page {page}/{totalPages}</span><div className="flex gap-2"><button onClick={() => setPage(Math.max(1,page-1))} disabled={page<=1} className="p-2 border border-slate-200 rounded-lg disabled:opacity-30 hover:bg-slate-50"><ChevronLeft size={16}/></button><button onClick={() => setPage(Math.min(totalPages,page+1))} disabled={page>=totalPages} className="p-2 border border-slate-200 rounded-lg disabled:opacity-30 hover:bg-slate-50"><ChevronRight size={16}/></button></div></div>
       </div>
+
+      <Modal open={showAdd} onClose={() => setShowAdd(false)} title="Nouveau contact">
+        <form onSubmit={handleAddContact} className="space-y-4">
+          <div><label className="text-sm font-medium text-slate-700 mb-1 block">Email *</label><input type="email" required value={newContact.email} onChange={e => setNewContact({...newContact, email: e.target.value})} placeholder="contact@exemple.com" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+          <div className="grid grid-cols-2 gap-4">
+            <div><label className="text-sm font-medium text-slate-700 mb-1 block">Prénom</label><input value={newContact.first_name} onChange={e => setNewContact({...newContact, first_name: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+            <div><label className="text-sm font-medium text-slate-700 mb-1 block">Nom</label><input value={newContact.last_name} onChange={e => setNewContact({...newContact, last_name: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div><label className="text-sm font-medium text-slate-700 mb-1 block">Entreprise</label><input value={newContact.company} onChange={e => setNewContact({...newContact, company: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+            <div><label className="text-sm font-medium text-slate-700 mb-1 block">Poste</label><input value={newContact.job_title} onChange={e => setNewContact({...newContact, job_title: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div><label className="text-sm font-medium text-slate-700 mb-1 block">Téléphone</label><input value={newContact.phone} onChange={e => setNewContact({...newContact, phone: e.target.value})} placeholder="+33..." className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+            <div><label className="text-sm font-medium text-slate-700 mb-1 block">Pays</label><input value={newContact.country} onChange={e => setNewContact({...newContact, country: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+          </div>
+          <div><label className="text-sm font-medium text-slate-700 mb-1 block">Ville</label><input value={newContact.city} onChange={e => setNewContact({...newContact, city: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+          <div className="flex items-center gap-4">
+            <label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={newContact.is_internal} onChange={e => setNewContact({...newContact, is_internal: e.target.checked})} className="rounded" />Contact interne (collaborateur)</label>
+            <label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={newContact.gdpr_consent} onChange={e => setNewContact({...newContact, gdpr_consent: e.target.checked})} className="rounded" />Consentement RGPD</label>
+          </div>
+          <div className="flex gap-3 pt-2">
+            <button type="button" onClick={() => setShowAdd(false)} className="flex-1 px-4 py-2.5 border border-slate-200 text-slate-600 rounded-xl text-sm font-medium hover:bg-slate-50">Annuler</button>
+            <button type="submit" disabled={adding} className="flex-1 px-4 py-2.5 bg-sky-600 text-white rounded-xl text-sm font-medium hover:bg-sky-500 disabled:opacity-50">{adding ? "Ajout..." : "Ajouter le contact"}</button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }
