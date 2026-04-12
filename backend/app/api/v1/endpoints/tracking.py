@@ -76,6 +76,7 @@ async def _update_contact_score(db, contact_id: str, event_type: EventType):
                      contact_id, old_score, new_score, event_type.value, new_stage)
     except Exception as e:
         logger.warning("Failed to update score for contact %s: %s", contact_id, str(e))
+        await db.rollback()
 
 
 async def _record_event(db, campaign_id: str, contact_id: str, event_type: EventType, url_clicked: Optional[str] = None):
@@ -113,6 +114,7 @@ async def _record_event(db, campaign_id: str, contact_id: str, event_type: Event
         await db.flush()
     except Exception as e:
         logger.warning("Failed to record event: %s", str(e))
+        await db.rollback()
 
 
 # ══════════════════════════════════════════════════════════
@@ -173,6 +175,7 @@ async def track_unsubscribe(
             await db.flush()
     except Exception as e:
         logger.warning("Failed to process unsubscribe: %s", str(e))
+        await db.rollback()
 
     return {"status": "unsubscribed", "message": "Vous avez été désinscrit."}
 
