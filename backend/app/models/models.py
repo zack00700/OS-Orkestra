@@ -287,6 +287,19 @@ class SyncLog(TimestampMixin, Base):
     duration_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
 
+class AppSetting(Base):
+    __tablename__ = "app_settings"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    key: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    value: Mapped[str] = mapped_column(LargeText())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
 class DataQualityReport(TimestampMixin, Base):
     __tablename__ = "data_quality_reports"
 

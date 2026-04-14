@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from "recharts";
-import { Search, Users, Mail, BarChart3, Zap, Send, Eye, MousePointerClick, RefreshCw, Filter, Plus, LayoutDashboard, Target, Database, Link2, LogOut, ChevronLeft, ChevronRight, X, Calendar, FileText, ArrowUpRight, ArrowDownRight, Layers, Radio } from "lucide-react";
+import { Search, Users, Mail, BarChart3, Zap, Send, Eye, MousePointerClick, RefreshCw, Filter, Plus, LayoutDashboard, Target, Database, Link2, LogOut, ChevronLeft, ChevronRight, X, Calendar, FileText, ArrowUpRight, ArrowDownRight, Layers, Radio, Upload, Code, Trash2, Save, Edit3 } from "lucide-react";
 
 const API = window.location.hostname === "localhost"
   ? "http://localhost:8000/api/v1"
@@ -1092,6 +1092,312 @@ function DiffusionPage() {
 }
 
 // ══════════════════════════════════════════════════════════
+// TEMPLATES EDITOR
+// ══════════════════════════════════════════════════════════
+
+function TemplatesPage() {
+  const [templates, setTemplates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(null);
+  const [editing, setEditing] = useState(false);
+  const [htmlContent, setHtmlContent] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
+  const [createForm, setCreateForm] = useState({ name: "", subject: "", category: "newsletter", html_content: "<html>\n<body>\n  <h1>Bonjour {{first_name}}</h1>\n  <p>Votre message ici</p>\n</body>\n</html>" });
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => { loadTemplates(); }, []);
+
+  const loadTemplates = async () => {
+    try { const data = await api("/templates/"); setTemplates(data || []); } catch (e) { console.error(e); }
+    setLoading(false);
+  };
+
+  const selectTemplate = async (tpl) => {
+    try {
+      const data = await api(`/templates/${tpl.id}`);
+      setSelected(data);
+      setHtmlContent(data.html_content || "");
+      setEditing(false);
+    } catch (e) { console.error(e); }
+  };
+
+  const saveTemplate = async () => {
+    if (!selected) return;
+    setSaving(true);
+    try {
+      await api(`/templates/${selected.id}`, { method: "PUT", body: JSON.stringify({ html_content: htmlContent }) });
+      setSelected({ ...selected, html_content: htmlContent });
+      setEditing(false);
+      loadTemplates();
+    } catch (e) { alert("Erreur: " + e.message); }
+    setSaving(false);
+  };
+
+  const createTemplate = async () => {
+    setSaving(true);
+    try {
+      await api("/templates/", { method: "POST", body: JSON.stringify(createForm) });
+      setShowCreate(false);
+      setCreateForm({ name: "", subject: "", category: "newsletter", html_content: "<html>\n<body>\n  <h1>Bonjour {{first_name}}</h1>\n  <p>Votre message ici</p>\n</body>\n</html>" });
+      loadTemplates();
+    } catch (e) { alert("Erreur: " + e.message); }
+    setSaving(false);
+  };
+
+  const deleteTemplate = async (id) => {
+    if (!confirm("Supprimer ce template ?")) return;
+    try { await api(`/templates/${id}`, { method: "DELETE" }); setSelected(null); loadTemplates(); } catch (e) { alert("Erreur: " + e.message); }
+  };
+
+  if (loading) return <div className="p-8 text-center text-slate-400">Chargement...</div>;
+
+  return (
+    <div className="p-8">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-lg font-bold text-slate-900">Templates email</h2>
+          <p className="text-sm text-slate-400">{templates.length} template{templates.length > 1 ? "s" : ""}</p>
+        </div>
+        <button onClick={() => setShowCreate(true)} className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 text-white rounded-xl text-sm font-medium hover:bg-slate-800"><Plus size={16}/>Nouveau template</button>
+      </div>
+
+      <div className="grid grid-cols-12 gap-6">
+        {/* Liste templates */}
+        <div className="col-span-4 space-y-2">
+          {templates.map(tpl => (
+            <div key={tpl.id} onClick={() => selectTemplate(tpl)} className={`p-4 rounded-2xl border cursor-pointer transition-all ${selected?.id === tpl.id ? "bg-sky-50 border-sky-200" : "bg-white border-slate-100 hover:border-slate-200"}`}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="font-medium text-slate-900 text-sm">{tpl.name}</div>
+                  <div className="text-xs text-slate-400 mt-1">{tpl.subject}</div>
+                </div>
+                <span className="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">{tpl.category}</span>
+              </div>
+            </div>
+          ))}
+          {templates.length === 0 && <div className="text-center text-slate-400 text-sm py-8">Aucun template. Créez-en un !</div>}
+        </div>
+
+        {/* Éditeur + Preview */}
+        <div className="col-span-8">
+          {selected ? (
+            <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
+              <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-slate-50">
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">{selected.name}</h3>
+                  <p className="text-xs text-slate-400">{selected.subject}</p>
+                </div>
+                <div className="flex gap-2">
+                  {editing ? (
+                    <>
+                      <button onClick={saveTemplate} disabled={saving} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-500 disabled:opacity-50"><Save size={14}/>{saving ? "..." : "Sauver"}</button>
+                      <button onClick={() => { setHtmlContent(selected.html_content); setEditing(false); }} className="px-3 py-1.5 bg-slate-200 text-slate-600 rounded-lg text-xs font-medium hover:bg-slate-300">Annuler</button>
+                    </>
+                  ) : (
+                    <>
+                      <button onClick={() => setEditing(true)} className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 text-white rounded-lg text-xs font-medium hover:bg-sky-500"><Edit3 size={14}/>Modifier</button>
+                      <button onClick={() => deleteTemplate(selected.id)} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-100 text-red-600 rounded-lg text-xs font-medium hover:bg-red-200"><Trash2 size={14}/></button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {editing ? (
+                <div className="grid grid-cols-2 divide-x divide-slate-100" style={{ height: "500px" }}>
+                  <div className="flex flex-col">
+                    <div className="px-3 py-2 bg-slate-900 text-slate-300 text-xs font-mono flex items-center gap-2"><Code size={12}/>HTML</div>
+                    <textarea value={htmlContent} onChange={e => setHtmlContent(e.target.value)} className="flex-1 p-4 font-mono text-xs text-slate-700 resize-none focus:outline-none bg-slate-50" spellCheck={false} />
+                  </div>
+                  <div className="flex flex-col">
+                    <div className="px-3 py-2 bg-sky-600 text-white text-xs font-medium flex items-center gap-2"><Eye size={12}/>Preview</div>
+                    <iframe srcDoc={htmlContent} className="flex-1 bg-white" title="preview" sandbox="" />
+                  </div>
+                </div>
+              ) : (
+                <div style={{ height: "500px" }}>
+                  <iframe srcDoc={selected.html_content || "<p>Aucun contenu</p>"} className="w-full h-full bg-white" title="preview" sandbox="" />
+                </div>
+              )}
+
+              <div className="p-3 border-t border-slate-100 bg-slate-50 text-xs text-slate-400">
+                Variables disponibles : {"{{first_name}}, {{last_name}}, {{company}}, {{email}}"}
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-slate-100 flex items-center justify-center" style={{ height: "500px" }}>
+              <div className="text-center text-slate-400">
+                <FileText size={48} className="mx-auto mb-3 opacity-30" />
+                <p className="text-sm">Sélectionnez un template pour le visualiser ou le modifier</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Modal création */}
+      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Nouveau template">
+        <div className="space-y-4">
+          <div><label className="text-sm font-medium text-slate-700 mb-1 block">Nom</label><input value={createForm.name} onChange={e => setCreateForm({...createForm, name: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" placeholder="Newsletter Avril" /></div>
+          <div><label className="text-sm font-medium text-slate-700 mb-1 block">Objet</label><input value={createForm.subject} onChange={e => setCreateForm({...createForm, subject: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" placeholder="Découvrez nos offres {{first_name}}" /></div>
+          <div><label className="text-sm font-medium text-slate-700 mb-1 block">Catégorie</label>
+            <select value={createForm.category} onChange={e => setCreateForm({...createForm, category: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400">
+              <option value="newsletter">Newsletter</option><option value="welcome">Bienvenue</option><option value="promo">Promotion</option><option value="event">Événement</option><option value="notification">Notification</option>
+            </select>
+          </div>
+          <div><label className="text-sm font-medium text-slate-700 mb-1 block">Contenu HTML</label><textarea value={createForm.html_content} onChange={e => setCreateForm({...createForm, html_content: e.target.value})} rows={8} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-mono focus:outline-none focus:border-sky-400" /></div>
+          <button onClick={createTemplate} disabled={saving || !createForm.name} className="w-full py-2.5 bg-slate-900 text-white rounded-xl text-sm font-medium hover:bg-slate-800 disabled:opacity-50">{saving ? "Création..." : "Créer le template"}</button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════
+// IMPORT CSV
+// ══════════════════════════════════════════════════════════
+
+function ImportCSVPage() {
+  const [step, setStep] = useState(1);
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [mapping, setMapping] = useState({});
+  const [importing, setImporting] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+
+  const uploadPreview = async () => {
+    if (!file) return;
+    setError("");
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const token = localStorage.getItem("orkestra_token");
+      const res = await fetch(`${API}/import/csv/preview`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData });
+      if (!res.ok) { const err = await res.json(); throw new Error(err.detail || "Erreur upload"); }
+      const data = await res.json();
+      setPreview(data);
+      setMapping(data.mapping_suggestions || {});
+      setStep(2);
+    } catch (e) { setError(e.message); }
+  };
+
+  const executeImport = async () => {
+    if (!file) return;
+    setImporting(true); setError("");
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("mapping_json", JSON.stringify(mapping));
+    try {
+      const token = localStorage.getItem("orkestra_token");
+      const res = await fetch(`${API}/import/csv/execute`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData });
+      if (!res.ok) { const err = await res.json(); throw new Error(err.detail || "Erreur import"); }
+      const data = await res.json();
+      setResult(data);
+      setStep(3);
+    } catch (e) { setError(e.message); }
+    setImporting(false);
+  };
+
+  const reset = () => { setStep(1); setFile(null); setPreview(null); setMapping({}); setResult(null); setError(""); };
+
+  return (
+    <div className="p-8">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-lg font-bold text-slate-900">Import CSV</h2>
+          <p className="text-sm text-slate-400">Importez vos contacts depuis un fichier CSV</p>
+        </div>
+        {step > 1 && <button onClick={reset} className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-600 rounded-xl text-sm hover:bg-slate-200"><RefreshCw size={14}/>Recommencer</button>}
+      </div>
+
+      {/* Progress */}
+      <div className="flex items-center gap-4 mb-8">
+        {["Upload", "Mapping", "Résultat"].map((label, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${step > i + 1 ? "bg-emerald-500 text-white" : step === i + 1 ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-400"}`}>{step > i + 1 ? "✓" : i + 1}</div>
+            <span className={`text-sm ${step === i + 1 ? "text-slate-900 font-medium" : "text-slate-400"}`}>{label}</span>
+            {i < 2 && <div className="w-12 h-px bg-slate-200" />}
+          </div>
+        ))}
+      </div>
+
+      {error && <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 text-sm mb-4">{error}</div>}
+
+      {/* Step 1: Upload */}
+      {step === 1 && (
+        <div className="bg-white rounded-2xl border border-slate-100 p-8 max-w-xl">
+          <div className="border-2 border-dashed border-slate-200 rounded-2xl p-8 text-center hover:border-sky-300 transition-colors">
+            <Upload size={40} className="mx-auto mb-3 text-slate-300" />
+            <p className="text-sm text-slate-600 mb-4">Glissez votre fichier CSV ici ou cliquez pour parcourir</p>
+            <input type="file" accept=".csv" onChange={e => setFile(e.target.files[0])} className="block mx-auto text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-medium file:bg-sky-50 file:text-sky-600 hover:file:bg-sky-100" />
+          </div>
+          {file && (
+            <div className="mt-4 flex items-center justify-between">
+              <span className="text-sm text-slate-600">{file.name} ({(file.size / 1024).toFixed(1)} KB)</span>
+              <button onClick={uploadPreview} className="px-5 py-2.5 bg-sky-600 text-white rounded-xl text-sm font-medium hover:bg-sky-500">Analyser</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Step 2: Mapping */}
+      {step === 2 && preview && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-2xl border border-slate-100 p-6">
+            <h3 className="text-base font-bold text-slate-900 mb-4">Mapping des colonnes</h3>
+            <p className="text-sm text-slate-400 mb-4">{preview.total_columns} colonnes détectées dans {preview.filename}</p>
+            <div className="space-y-3">
+              {preview.columns.map(col => (
+                <div key={col} className="flex items-center gap-4">
+                  <div className="w-48 text-sm font-mono text-slate-600 bg-slate-50 px-3 py-2 rounded-lg truncate">{col}</div>
+                  <span className="text-slate-300">→</span>
+                  <select value={mapping[col] || ""} onChange={e => setMapping({...mapping, [col]: e.target.value})} className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-sky-400">
+                    <option value="">— Ignorer —</option>
+                    {preview.orkestra_fields.map(f => <option key={f} value={f}>{f}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Preview data */}
+          <div className="bg-white rounded-2xl border border-slate-100 p-6">
+            <h3 className="text-base font-bold text-slate-900 mb-4">Aperçu des données</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead><tr className="bg-slate-50">{preview.columns.map(c => <th key={c} className="px-3 py-2 text-left font-medium text-slate-600 text-xs">{c}</th>)}</tr></thead>
+                <tbody>{preview.preview_rows.map((row, i) => <tr key={i} className="border-t border-slate-50">{preview.columns.map(c => <td key={c} className="px-3 py-2 text-slate-700 text-xs">{row[c]}</td>)}</tr>)}</tbody>
+              </table>
+            </div>
+          </div>
+
+          <button onClick={executeImport} disabled={importing || !Object.values(mapping).some(v => v)} className="px-6 py-3 bg-slate-900 text-white rounded-xl text-sm font-medium hover:bg-slate-800 disabled:opacity-50">{importing ? "Import en cours..." : "Importer les contacts"}</button>
+        </div>
+      )}
+
+      {/* Step 3: Result */}
+      {step === 3 && result && (
+        <div className="bg-white rounded-2xl border border-slate-100 p-8 max-w-xl">
+          <div className="text-center mb-6">
+            <div className="w-16 h-16 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-4"><span className="text-3xl">✓</span></div>
+            <h3 className="text-lg font-bold text-slate-900">Import terminé</h3>
+          </div>
+          <div className="grid grid-cols-3 gap-4 mb-6">
+            <div className="text-center p-4 bg-emerald-50 rounded-xl"><div className="text-2xl font-bold text-emerald-700">{result.imported}</div><div className="text-xs text-emerald-600 mt-1">Importés</div></div>
+            <div className="text-center p-4 bg-amber-50 rounded-xl"><div className="text-2xl font-bold text-amber-700">{result.skipped}</div><div className="text-xs text-amber-600 mt-1">Ignorés</div></div>
+            <div className="text-center p-4 bg-red-50 rounded-xl"><div className="text-2xl font-bold text-red-700">{result.errors?.length || 0}</div><div className="text-xs text-red-600 mt-1">Erreurs</div></div>
+          </div>
+          {result.errors?.length > 0 && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-600 mb-4">{result.errors.map((e, i) => <div key={i}>{e}</div>)}</div>
+          )}
+          <button onClick={reset} className="w-full py-2.5 bg-sky-600 text-white rounded-xl text-sm font-medium hover:bg-sky-500">Nouvel import</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════
 // MAIN APP
 // ══════════════════════════════════════════════════════════
 
@@ -1105,13 +1411,15 @@ export default function App() {
     { id: "contacts", label: "Contacts", icon: Users },
     { id: "campaigns", label: "Campagnes", icon: Send },
     { id: "segments", label: "Segments", icon: Target },
+    { id: "templates", label: "Templates", icon: FileText },
     { id: "analytics", label: "Analytics", icon: BarChart3 },
-    { id: "mapping", label: "Mapping", icon: Layers },
+    { id: "import", label: "Import CSV", icon: Upload },
+    { id: "mapping", label: "Mapping DB", icon: Layers },
     { id: "diffusion", label: "Diffusion", icon: Radio },
     { id: "integrations", label: "Intégrations", icon: Link2 },
   ];
 
-  const pages = { dashboard: DashboardPage, contacts: ContactsPage, campaigns: CampaignsPage, segments: SegmentsPage, analytics: AnalyticsPage, integrations: IntegrationsPage, mapping: MappingPage, diffusion: DiffusionPage };
+  const pages = { dashboard: DashboardPage, contacts: ContactsPage, campaigns: CampaignsPage, segments: SegmentsPage, templates: TemplatesPage, analytics: AnalyticsPage, integrations: IntegrationsPage, mapping: MappingPage, diffusion: DiffusionPage, import: ImportCSVPage };
   const Page = pages[activeNav];
 
   return (

@@ -4,8 +4,10 @@ Compatible Python 3.9+ / pymssql sync
 """
 import uuid as _uuid
 import json
+from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select, text
 from app.core.database import get_db
 from app.core.query_helpers import build_raw_paginated_query
@@ -16,6 +18,15 @@ from app.schemas.schemas import TemplateCreate, SegmentCreate
 # ── TEMPLATES ──────────────────────────────────────────
 
 templates_router = APIRouter(prefix="/templates", tags=["Templates"])
+
+
+class TemplateUpdate(BaseModel):
+    name: Optional[str] = None
+    subject: Optional[str] = None
+    html_content: Optional[str] = None
+    text_content: Optional[str] = None
+    category: Optional[str] = None
+    variables: Optional[list] = None
 
 
 @templates_router.get("/")
@@ -32,6 +43,7 @@ async def list_templates(
             "id": str(t.id),
             "name": t.name,
             "subject": t.subject,
+            "html_content": t.html_content,
             "category": t.category,
             "variables": _parse_json(t.variables),
             "is_active": t.is_active,
@@ -81,6 +93,53 @@ async def create_template(
     return {"id": str(tpl.id), "name": tpl.name, "message": "Template créé"}
 
 
+@templates_router.put("/{template_id}")
+async def update_template(
+    template_id: str,
+    data: TemplateUpdate,
+    db=Depends(get_db),
+    current_user: dict = Depends(require_roles("admin", "manager", "editor")),
+):
+    """Met à jour un template (HTML, subject, etc.)."""
+    result = await db.execute(select(Template).where(Template.id == template_id))
+    tpl = result.scalar_one_or_none()
+    if not tpl:
+        raise HTTPException(status_code=404, detail="Template non trouvé")
+
+    if data.name is not None:
+        tpl.name = data.name
+    if data.subject is not None:
+        tpl.subject = data.subject
+    if data.html_content is not None:
+        tpl.html_content = data.html_content
+    if data.text_content is not None:
+        tpl.text_content = data.text_content
+    if data.category is not None:
+        tpl.category = data.category
+    if data.variables is not None:
+        tpl.variables = json.dumps(data.variables)
+
+    tpl.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+    return {"id": str(tpl.id), "name": tpl.name, "message": "Template mis à jour"}
+
+
+@templates_router.delete("/{template_id}")
+async def delete_template(
+    template_id: str,
+    db=Depends(get_db),
+    current_user: dict = Depends(require_roles("admin")),
+):
+    """Supprime un template."""
+    result = await db.execute(select(Template).where(Template.id == template_id))
+    tpl = result.scalar_one_or_none()
+    if not tpl:
+        raise HTTPException(status_code=404, detail="Template non trouvé")
+    await db.delete(tpl)
+    await db.flush()
+    return {"message": f"Template '{tpl.name}' supprimé"}
+
+
 # ── SEGMENTS (DYNAMIQUES) ─────────────────────────────
 
 segments_router = APIRouter(prefix="/segments", tags=["Segments"])
@@ -96,7 +155,6 @@ async def list_segments(
 
     output = []
     for s in segments:
-        # Recalculer le count dynamiquement
         criteria = _parse_json(s.filter_criteria)
         count = await _count_contacts_for_segment(db, criteria)
 
@@ -151,12 +209,10 @@ async def get_segment_contacts(
     criteria = _parse_json(s.filter_criteria)
     where_clause, params = _build_where_clause(criteria)
 
-    # Count
     count_sql = f"SELECT COUNT(*) FROM contacts{where_clause}"
     count_result = await db.execute(text(count_sql))
     total = count_result.fetchone()[0]
 
-    # Paginated results (portable : LIMIT/OFFSET pour SQLite/PG, OFFSET FETCH pour SQL Server)
     base_sql = f"SELECT id, email, first_name, last_name, company, country, city, phone, job_title, source, status, lead_stage, lead_score FROM contacts{where_clause}"
     data_sql = build_raw_paginated_query(base_sql, page=page, page_size=page_size, order_by="email")
     data_result = await db.execute(text(data_sql))
@@ -207,7 +263,6 @@ async def create_segment(
     db.add(seg)
     await db.flush()
 
-    # Calculer le count initial
     criteria = data.filter_criteria if isinstance(data.filter_criteria, dict) else {}
     count = await _count_contacts_for_segment(db, criteria)
 

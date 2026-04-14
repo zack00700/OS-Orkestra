@@ -1,6 +1,7 @@
 """
 OS Orkestra — Endpoints Diffusion
 Configure les canaux d'envoi (SMTP, WhatsApp, SMS) et gère l'envoi réel.
+Config persistée en DB (table app_settings) — survit aux redéploiements.
 Compatible Python 3.9+ / pymssql sync
 """
 import uuid
@@ -23,7 +24,6 @@ logger = logging.getLogger("orkestra.diffusion")
 
 router = APIRouter(prefix="/diffusion", tags=["Diffusion"])
 
-# Whitelist des colonnes autorisées pour les filtres (anti SQL injection)
 ALLOWED_FILTER_COLUMNS = {"country", "city", "company", "segment", "source", "status", "lead_stage", "business_unit"}
 
 
@@ -64,10 +64,66 @@ class LaunchCampaignRequest(BaseModel):
 
 
 # ══════════════════════════════════════════════════════════
-# STOCKAGE CONFIG (en mémoire — sera persisté plus tard)
+# PERSISTANCE CONFIG (DB avec fallback mémoire)
 # ══════════════════════════════════════════════════════════
 
-_diffusion_config: Dict[str, Any] = {}
+_config_cache: Dict[str, Any] = {}
+
+
+async def _load_config_from_db(db, key: str) -> Optional[dict]:
+    """Charge une config depuis la table app_settings."""
+    try:
+        result = await db.execute(
+            text("SELECT [value] FROM app_settings WHERE [key] = :key"),
+            {"key": key},
+        )
+        row = result.fetchone()
+        if row and row[0]:
+            return json.loads(row[0])
+    except Exception as e:
+        logger.debug("app_settings not available, using memory: %s", str(e))
+    return None
+
+
+async def _save_config_to_db(db, key: str, value: dict):
+    """Sauvegarde une config dans la table app_settings."""
+    json_value = json.dumps(value)
+    try:
+        result = await db.execute(
+            text("SELECT COUNT(*) FROM app_settings WHERE [key] = :key"),
+            {"key": key},
+        )
+        count = result.fetchone()[0]
+        if count > 0:
+            await db.execute(
+                text("UPDATE app_settings SET [value] = :val, updated_at = :now WHERE [key] = :key"),
+                {"val": json_value, "now": datetime.now(timezone.utc).isoformat(), "key": key},
+            )
+        else:
+            await db.execute(
+                text("INSERT INTO app_settings (id, [key], [value], updated_at) VALUES (:id, :key, :val, :now)"),
+                {"id": str(uuid.uuid4()), "key": key, "val": json_value, "now": datetime.now(timezone.utc).isoformat()},
+            )
+        await db.flush()
+    except Exception as e:
+        logger.warning("Failed to persist config %s: %s", key, str(e))
+
+
+async def _get_config(db, key: str) -> dict:
+    """Récupère une config (cache → DB → vide)."""
+    if key in _config_cache:
+        return _config_cache[key]
+    db_config = await _load_config_from_db(db, key)
+    if db_config:
+        _config_cache[key] = db_config
+        return db_config
+    return {}
+
+
+async def _set_config(db, key: str, value: dict):
+    """Sauvegarde en mémoire + DB."""
+    _config_cache[key] = value
+    await _save_config_to_db(db, key, value)
 
 
 # ══════════════════════════════════════════════════════════
@@ -76,53 +132,63 @@ _diffusion_config: Dict[str, Any] = {}
 
 @router.get("/config")
 async def get_diffusion_config(
+    db=Depends(get_db),
     current_user: dict = Depends(require_roles("admin", "manager")),
 ):
-    """Récupère la config de diffusion actuelle."""
-    safe = {}
-    for key, val in _diffusion_config.items():
-        if isinstance(val, dict):
-            safe[key] = {k: ("****" if k in ("password", "api_token", "api_key", "api_secret") else v) for k, v in val.items()}
-        else:
-            safe[key] = val
+    """Récupère la config de diffusion actuelle (depuis DB)."""
+    smtp = await _get_config(db, "smtp_config")
+    whatsapp = await _get_config(db, "whatsapp_config")
+    sms = await _get_config(db, "sms_config")
+
+    def _mask(conf):
+        if not conf:
+            return {"status": "not_configured"}
+        return {k: ("****" if k in ("password", "api_token", "api_key", "api_secret") else v) for k, v in conf.items()}
+
     return {
-        "smtp": safe.get("smtp", {"status": "not_configured"}),
-        "whatsapp": safe.get("whatsapp", {"status": "not_configured"}),
-        "sms": safe.get("sms", {"status": "not_configured"}),
+        "smtp": _mask(smtp),
+        "whatsapp": _mask(whatsapp),
+        "sms": _mask(sms),
     }
 
 
 @router.post("/config/smtp")
 async def configure_smtp(
     data: SMTPConfig,
+    db=Depends(get_db),
     current_user: dict = Depends(require_roles("admin")),
 ):
-    """Configure le serveur SMTP pour l'envoi d'emails."""
-    _diffusion_config["smtp"] = data.model_dump()
-    _diffusion_config["smtp"]["status"] = "configured"
-    _diffusion_config["smtp"]["configured_at"] = datetime.now(timezone.utc).isoformat()
+    """Configure le serveur SMTP (persisté en DB)."""
+    config = data.model_dump()
+    config["status"] = "configured"
+    config["configured_at"] = datetime.now(timezone.utc).isoformat()
+    await _set_config(db, "smtp_config", config)
     return {"status": "saved", "message": f"SMTP configuré : {data.host}:{data.port}"}
 
 
 @router.post("/config/whatsapp")
 async def configure_whatsapp(
     data: WhatsAppConfig,
+    db=Depends(get_db),
     current_user: dict = Depends(require_roles("admin")),
 ):
-    """Configure l'API WhatsApp Business."""
-    _diffusion_config["whatsapp"] = data.model_dump()
-    _diffusion_config["whatsapp"]["status"] = "configured"
+    """Configure l'API WhatsApp Business (persisté en DB)."""
+    config = data.model_dump()
+    config["status"] = "configured"
+    await _set_config(db, "whatsapp_config", config)
     return {"status": "saved", "message": "WhatsApp Business configuré"}
 
 
 @router.post("/config/sms")
 async def configure_sms(
     data: SMSConfig,
+    db=Depends(get_db),
     current_user: dict = Depends(require_roles("admin")),
 ):
-    """Configure le provider SMS."""
-    _diffusion_config["sms"] = data.model_dump()
-    _diffusion_config["sms"]["status"] = "configured"
+    """Configure le provider SMS (persisté en DB)."""
+    config = data.model_dump()
+    config["status"] = "configured"
+    await _set_config(db, "sms_config", config)
     return {"status": "saved", "message": f"SMS configuré ({data.provider})"}
 
 
@@ -132,24 +198,28 @@ async def configure_sms(
 
 @router.post("/test-smtp")
 async def test_smtp_connection(
+    db=Depends(get_db),
     current_user: dict = Depends(require_roles("admin", "manager")),
 ):
     """Teste la connexion SMTP."""
-    smtp = _diffusion_config.get("smtp")
-    if not smtp:
+    smtp = await _get_config(db, "smtp_config")
+    if not smtp or smtp.get("status") == "not_configured":
         raise HTTPException(status_code=400, detail="SMTP non configuré")
 
     try:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _test_smtp_sync, smtp)
-        _diffusion_config["smtp"]["status"] = "connected"
-        _diffusion_config["smtp"]["last_tested"] = datetime.now(timezone.utc).isoformat()
+        smtp["status"] = "connected"
+        smtp["last_tested"] = datetime.now(timezone.utc).isoformat()
+        await _set_config(db, "smtp_config", smtp)
         return {"success": True, "message": f"Connecté à {smtp['host']}:{smtp['port']}"}
     except smtplib.SMTPAuthenticationError:
-        _diffusion_config["smtp"]["status"] = "error"
+        smtp["status"] = "error"
+        await _set_config(db, "smtp_config", smtp)
         return {"success": False, "message": "Erreur d'authentification — vérifiez le login/mot de passe"}
     except Exception as e:
-        _diffusion_config["smtp"]["status"] = "error"
+        smtp["status"] = "error"
+        await _set_config(db, "smtp_config", smtp)
         return {"success": False, "message": f"Erreur : {str(e)}"}
 
 
@@ -167,11 +237,12 @@ def _test_smtp_sync(smtp: dict):
 @router.post("/send-test-email")
 async def send_test_email(
     data: SendTestEmail,
+    db=Depends(get_db),
     current_user: dict = Depends(require_roles("admin", "manager")),
 ):
     """Envoie un email de test."""
-    smtp = _diffusion_config.get("smtp")
-    if not smtp:
+    smtp = await _get_config(db, "smtp_config")
+    if not smtp or smtp.get("status") == "not_configured":
         raise HTTPException(status_code=400, detail="SMTP non configuré — allez dans Diffusion > Email")
 
     try:
@@ -188,7 +259,7 @@ async def send_test_email(
 
 
 # ══════════════════════════════════════════════════════════
-# LANCER UNE CAMPAGNE (envoi réel)
+# LANCER UNE CAMPAGNE
 # ══════════════════════════════════════════════════════════
 
 @router.post("/launch-campaign")
@@ -198,22 +269,19 @@ async def launch_campaign(
     current_user: dict = Depends(require_roles("admin", "manager")),
 ):
     """Lance une campagne — envoie les emails aux contacts du segment."""
-    smtp = _diffusion_config.get("smtp")
-    if not smtp:
+    smtp = await _get_config(db, "smtp_config")
+    if not smtp or smtp.get("status") == "not_configured":
         raise HTTPException(status_code=400, detail="SMTP non configuré — allez dans Diffusion > Email")
 
-    # Récupérer la campagne
     result = await db.execute(select(Campaign).where(Campaign.id == data.campaign_id))
     campaign = result.scalar_one_or_none()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campagne non trouvée")
 
-    # Vérifier le statut (comparaison insensible à la casse pour gérer UPPER en DB)
     status_str = campaign.status.value if hasattr(campaign.status, 'value') else str(campaign.status)
     if status_str.upper() not in ("DRAFT", "SCHEDULED"):
         raise HTTPException(status_code=400, detail=f"Campagne en statut {status_str} — ne peut pas être lancée")
 
-    # Récupérer le template
     template_html = "<html><body><h2>{{subject}}</h2><p>Bonjour {{first_name}},</p><p>Ce message vous est envoyé par {{from_name}}.</p></body></html>"
     template_text = "Bonjour {{first_name}}, ce message vous est envoyé par {{from_name}}."
     if campaign.template_id:
@@ -223,18 +291,14 @@ async def launch_campaign(
             template_html = tpl.html_content
             template_text = tpl.text_content or ""
 
-    # Récupérer les contacts du segment (avec requêtes paramétrées)
     contacts = await _get_segment_contacts(db, campaign.segment_id)
-
     if not contacts:
         raise HTTPException(status_code=400, detail="Aucun contact dans le segment ciblé")
 
-    # Mettre à jour le statut
     campaign.status = CampaignStatus.RUNNING
     campaign.sent_at = datetime.now(timezone.utc)
     await db.flush()
 
-    # Envoyer les emails
     stats = {"sent": 0, "errors": 0, "total": len(contacts)}
     subject = campaign.subject or campaign.name
     from_name = campaign.from_name or smtp.get("from_name", "OS Orkestra")
@@ -247,7 +311,6 @@ async def launch_campaign(
         last_name = contact[3] or ""
         company = contact[4] or ""
 
-        # Personnaliser le template
         html = template_html.replace("{{first_name}}", first_name)
         html = html.replace("{{last_name}}", last_name)
         html = html.replace("{{company}}", company)
@@ -259,39 +322,19 @@ async def launch_campaign(
         txt = txt.replace("{{last_name}}", last_name)
         txt = txt.replace("{{company}}", company)
 
-        # Envoyer (non-bloquant via thread pool)
         send_result = await _send_email_async(
-            to_email=email,
-            subject=subject,
-            html_content=html,
-            text_content=txt,
-            smtp_config=smtp,
-            from_email=from_email,
-            from_name=from_name,
+            to_email=email, subject=subject, html_content=html, text_content=txt,
+            smtp_config=smtp, from_email=from_email, from_name=from_name,
         )
 
         if send_result.get("success"):
             stats["sent"] += 1
-            # Enregistrer les événements
-            db.add(CampaignEvent(
-                id=str(uuid.uuid4()),
-                campaign_id=str(campaign.id),
-                contact_id=contact_id,
-                event_type=EventType.SENT,
-                timestamp=datetime.now(timezone.utc),
-            ))
-            db.add(CampaignEvent(
-                id=str(uuid.uuid4()),
-                campaign_id=str(campaign.id),
-                contact_id=contact_id,
-                event_type=EventType.DELIVERED,
-                timestamp=datetime.now(timezone.utc),
-            ))
+            db.add(CampaignEvent(id=str(uuid.uuid4()), campaign_id=str(campaign.id), contact_id=contact_id, event_type=EventType.SENT, timestamp=datetime.now(timezone.utc)))
+            db.add(CampaignEvent(id=str(uuid.uuid4()), campaign_id=str(campaign.id), contact_id=contact_id, event_type=EventType.DELIVERED, timestamp=datetime.now(timezone.utc)))
         else:
             stats["errors"] += 1
             logger.warning("Email failed for %s: %s", email, send_result.get("message"))
 
-    # Mettre à jour les compteurs
     campaign.total_sent = stats["sent"]
     campaign.total_delivered = stats["sent"]
     campaign.total_bounced = stats["errors"]
@@ -317,13 +360,9 @@ async def launch_campaign(
 async def _get_segment_contacts(db, segment_id) -> list:
     """Récupère les contacts d'un segment avec des requêtes sécurisées."""
     if not segment_id:
-        # Pas de segment → tous les contacts
-        result = await db.execute(text(
-            "SELECT id, email, first_name, last_name, company FROM contacts"
-        ))
+        result = await db.execute(text("SELECT id, email, first_name, last_name, company FROM contacts"))
         return result.fetchall()
 
-    # Récupérer le segment et ses filtres
     seg_result = await db.execute(select(Segment).where(Segment.id == segment_id))
     seg = seg_result.scalar_one_or_none()
     if not seg:
@@ -337,12 +376,9 @@ async def _get_segment_contacts(db, segment_id) -> list:
             criteria = {}
 
     if not criteria:
-        result = await db.execute(text(
-            "SELECT id, email, first_name, last_name, company FROM contacts"
-        ))
+        result = await db.execute(text("SELECT id, email, first_name, last_name, company FROM contacts"))
         return result.fetchall()
 
-    # Construire la requête avec des paramètres bindés (anti SQL injection)
     where_parts = []
     params = {}
     param_idx = 0
@@ -354,9 +390,7 @@ async def _get_segment_contacts(db, segment_id) -> list:
             param_idx += 1
 
     if not where_parts:
-        result = await db.execute(text(
-            "SELECT id, email, first_name, last_name, company FROM contacts"
-        ))
+        result = await db.execute(text("SELECT id, email, first_name, last_name, company FROM contacts"))
         return result.fetchall()
 
     where_sql = " WHERE " + " AND ".join(where_parts)
@@ -368,35 +402,21 @@ async def _get_segment_contacts(db, segment_id) -> list:
 
 
 async def _send_email_async(
-    to_email: str,
-    subject: str,
-    html_content: str,
-    text_content: str = "",
-    smtp_config: Optional[dict] = None,
-    from_email: Optional[str] = None,
-    from_name: Optional[str] = None,
+    to_email: str, subject: str, html_content: str, text_content: str = "",
+    smtp_config: Optional[dict] = None, from_email: Optional[str] = None, from_name: Optional[str] = None,
 ) -> dict:
     """Envoie un email via SMTP dans un thread pool (non-bloquant)."""
     if not smtp_config:
         return {"success": False, "message": "SMTP non configuré"}
-
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
-        None,
-        _send_email_sync,
-        to_email, subject, html_content, text_content,
-        smtp_config, from_email, from_name,
+        None, _send_email_sync, to_email, subject, html_content, text_content, smtp_config, from_email, from_name,
     )
 
 
 def _send_email_sync(
-    to_email: str,
-    subject: str,
-    html_content: str,
-    text_content: str = "",
-    smtp_config: Optional[dict] = None,
-    from_email: Optional[str] = None,
-    from_name: Optional[str] = None,
+    to_email: str, subject: str, html_content: str, text_content: str = "",
+    smtp_config: Optional[dict] = None, from_email: Optional[str] = None, from_name: Optional[str] = None,
 ) -> dict:
     """Envoie un email via SMTP (sync, exécuté dans un thread)."""
     sender_email = from_email or smtp_config.get("from_email", smtp_config["username"])

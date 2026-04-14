@@ -1,7 +1,7 @@
 # OS Orkestra — CLAUDE.md
 
 > Ce fichier documente le contexte complet du projet pour Claude Code.
-> Dernière mise à jour : 12 avril 2026
+> Dernière mise à jour : 14 avril 2026
 
 ## Le Projet
 
@@ -34,7 +34,7 @@
 - **Font** : Outfit (Google Fonts)
 - **API URL** : `/api/v1` en prod (Render), `http://localhost:8000/api/v1` en local
 
-### Base de données Orkestra (10 tables)
+### Base de données Orkestra (11 tables)
 ```
 users                 → Comptes admin/manager/editor/viewer
 contacts              → Contacts importés depuis CRM + mapping + ajout manuel
@@ -46,6 +46,7 @@ campaign_events       → Tracking (sent, delivered, opened, clicked) + scoring
 automation_scenarios  → Scénarios d'automatisation (workflow)
 sync_logs             → Logs de synchronisation CRM
 data_quality_reports  → Rapports qualité des données
+app_settings          → Config persistée (SMTP, WhatsApp, SMS) — key/value JSON
 ```
 
 ### Base CRM-Test (3 tables — simule un CRM client)
@@ -95,7 +96,8 @@ OS-Orkestra/
 │   │           ├── tracking.py                  # Pixel ouverture + redirect clic + scoring auto
 │   │           ├── templates_segments.py         # Templates + Segments dynamiques
 │   │           ├── integrations.py              # Config connexions DB/CRM
-│   │           ├── diffusion.py                 # Config SMTP/WhatsApp/SMS + envoi réel campagnes
+│   │           ├── diffusion.py                 # Config SMTP/WhatsApp/SMS (persistée DB) + envoi réel
+│   │           ├── csv_import.py                # Import CSV (preview + mapping + execute)
 │   │           └── mapping.py                   # Mapping externe → Orkestra (5 étapes)
 │   ├── tests/
 │   │   ├── conftest.py                          # SQLite in-memory + StaticPool + fixtures
@@ -211,6 +213,14 @@ cd ../frontend && npm install && npm run build && cp -r dist ../backend/frontend
 
 ---
 
+## Ajouts Sprint 7/8/9 (14 avril 2026)
+
+- **Sprint 7 — Templates CRUD** : `PUT /templates/{id}` (roles: admin/manager/editor) + `DELETE /templates/{id}` (admin). Bump `updated_at` explicite. `html_content` maintenant retourné dans `GET /templates/`.
+- **Sprint 8 — Persistance config diffusion** : nouvelle table `app_settings` (key/value JSON). Les configs SMTP/WhatsApp/SMS sont persistées via `_get_config()` / `_set_config()`. Cache mémoire (`_config_cache`) en front de la DB. Identifiants bracket-quotés (`[key]`, `[value]`) pour compat SQL Server + SQLite.
+- **Sprint 9 — Import CSV** : endpoints `POST /import/csv/preview` (upload + auto-suggest mapping) et `POST /import/csv/execute` (upload + mapping_json + import). Précharge tous les emails existants en 1 SELECT (anti N+1), valide les emails par regex, `rollback` dans les `except`.
+
+---
+
 ## Ce qui FONCTIONNE (déployé sur Render)
 
 - ✅ Login / JWT auth avec RBAC (admin, manager, editor, viewer)
@@ -236,11 +246,9 @@ cd ../frontend && npm install && npm run build && cp -r dist ../backend/frontend
 1. **Envoi WhatsApp réel** — Via Meta Business API (endpoint existe dans diffusion.py, pas encore connecté)
 2. **Envoi SMS réel** — Via Twilio/Vonage (endpoint existe, pas encore connecté)
 3. **Auto-deploy Render** — GitHub Actions déclenche deploy si tests passent
-4. **Persistance config diffusion** — Actuellement en mémoire (`_diffusion_config` dict), perdu au redéploiement. Stocker dans une table DB ou dans les env vars.
 
 ### Priorité MOYENNE
 5. **Segments — filtres multiples** — Aujourd'hui un segment = un filtre. Permettre : pays = "Ghana" ET secteur = "Tech"
-6. **Import CSV** — Upload fichier CSV + mapping visuel (comme le mapping DB)
 7. **��diteur de template email** — Drag-and-drop ou éditeur HTML visuel
 8. **RGPD** — Workflow consentement, droit à l'oubli, export données
 9. **`regex` → `pattern`** — Warnings FastAPI dans contacts.py (sort_by, sort_order). Remplacer `regex=` par `pattern=`.
@@ -262,7 +270,7 @@ cd ../frontend && npm install && npm run build && cp -r dist ../backend/frontend
 
 3. **Azure SQL serverless pause** — Première requête après inactivité peut timeout. La seconde marche.
 
-4. **Config diffusion volatile** — La config SMTP/WhatsApp/SMS est stockée en mémoire. Perdue au redéploiement Render. Solution : persister dans une table DB.
+4. ~~**Config diffusion volatile**~~ — ✅ Résolu (Sprint 8) : persistée dans `app_settings`. Note : cache mémoire par worker — les autres workers verront la nouvelle config à leur prochain GET (cache miss → DB).
 
 ---
 
