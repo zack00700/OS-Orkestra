@@ -12,6 +12,7 @@ from app.api.v1.endpoints.templates_segments import templates_router, segments_r
 from app.api.v1.endpoints.mapping import router as mapping_router
 from app.api.v1.endpoints.diffusion import router as diffusion_router
 from app.api.v1.endpoints.csv_import import router as csv_import_router
+from app.api.v1.endpoints.writeback import router as writeback_router
 
 api_router = APIRouter()
 api_router.include_router(auth_router)
@@ -25,3 +26,4 @@ api_router.include_router(segments_router)
 api_router.include_router(mapping_router)
 api_router.include_router(diffusion_router)
 api_router.include_router(csv_import_router)
+api_router.include_router(writeback_router)
