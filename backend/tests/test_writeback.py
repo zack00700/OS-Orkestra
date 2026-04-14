@@ -122,6 +122,37 @@ async def test_writeback_rejects_unauthorized_orkestra_field(client: AsyncClient
 
 
 @pytest.mark.asyncio
+async def test_writeback_preserves_password_when_empty(client: AsyncClient, auth_headers: dict):
+    """Re-save avec password vide doit conserver l'ancien."""
+    from app.api.v1.endpoints import writeback
+    writeback._writeback_cache.clear()
+
+    initial = {
+        "config": {
+            "host": "crm.example.com", "port": 1433, "username": "u", "password": "original_pwd",
+            "database": "db", "table": "Clients", "key_field": "ClientID",
+        },
+        "field_mapping": [{"orkestra_field": "email", "crm_field": "Email"}],
+    }
+    r = await client.post("/api/v1/sync/config", json=initial, headers=auth_headers)
+    assert r.status_code == 200
+
+    # Re-save avec password vide → ancien conservé
+    update = {
+        "config": {
+            "host": "crm.newhost.com", "port": 1433, "username": "u", "password": "",
+            "database": "db", "table": "Clients", "key_field": "ClientID",
+        },
+        "field_mapping": [{"orkestra_field": "email", "crm_field": "Email"}],
+    }
+    r = await client.post("/api/v1/sync/config", json=update, headers=auth_headers)
+    assert r.status_code == 200
+
+    assert writeback._writeback_cache["writeback_config"]["password"] == "original_pwd"
+    assert writeback._writeback_cache["writeback_config"]["host"] == "crm.newhost.com"
+
+
+@pytest.mark.asyncio
 async def test_writeback_execute_with_injection_in_contact_ids(client: AsyncClient, auth_headers: dict):
     """Contact_ids malicieux sont traités comme params bindés (pas d'injection)."""
     from app.api.v1.endpoints import writeback

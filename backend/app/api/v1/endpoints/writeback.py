@@ -234,11 +234,15 @@ async def save_sync_config(
         _validate_ident(m.crm_field, "crm_field")
         mapping_validated.append({"orkestra_field": m.orkestra_field, "crm_field": m.crm_field})
 
+    # Préserve le password existant si vide dans la requête
+    existing = await _get_writeback_config(db) or {}
+    password = data.config.password or existing.get("password", "")
+
     config = {
         "host": data.config.host,
         "port": data.config.port,
         "username": data.config.username,
-        "password": data.config.password,  # stocké en clair (dette sécu — à chiffrer au repos)
+        "password": password,  # stocké en clair (dette sécu — à chiffrer au repos)
         "database": data.config.database,
         "table": data.config.table,
         "key_field": data.config.key_field,

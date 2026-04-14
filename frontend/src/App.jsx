@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from "recharts";
-import { Search, Users, Mail, BarChart3, Zap, Send, Eye, MousePointerClick, RefreshCw, Filter, Plus, LayoutDashboard, Target, Database, Link2, LogOut, ChevronLeft, ChevronRight, X, Calendar, FileText, ArrowUpRight, ArrowDownRight, Layers, Radio, Upload, Code, Trash2, Save, Edit3 } from "lucide-react";
+import { Search, Users, Mail, BarChart3, Zap, Send, Eye, MousePointerClick, RefreshCw, Filter, Plus, LayoutDashboard, Target, Database, Link2, LogOut, ChevronLeft, ChevronRight, X, Calendar, FileText, ArrowUpRight, ArrowDownRight, Layers, Radio, Upload, Code, Trash2, Save, Edit3, Loader2, ArrowLeftRight, CheckCircle, AlertCircle, Clock } from "lucide-react";
 
 const API = window.location.hostname === "localhost"
   ? "http://localhost:8000/api/v1"
@@ -1482,6 +1482,551 @@ function ImportCSVPage() {
 }
 
 // ══════════════════════════════════════════════════════════
+// SYNC CRM (Write-back)
+// ══════════════════════════════════════════════════════════
+
+function SyncCRMPage() {
+  const [tab, setTab] = useState("config");
+  const [loading, setLoading] = useState(true);
+  const [config, setConfig] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [logs, setLogs] = useState([]);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState(null);
+  const [testResult, setTestResult] = useState(null);
+  const [isDirty, setIsDirty] = useState(false);
+
+  const [form, setForm] = useState({
+    host: "osmdm-server.database.windows.net",
+    port: 1433,
+    username: "",
+    password: "",
+    database: "CRM-Test",
+    table: "Clients",
+    key_field: "ClientID",
+  });
+
+  const [mapping, setMapping] = useState([
+    { orkestra_field: "lead_score", crm_field: "Score" },
+    { orkestra_field: "lead_stage", crm_field: "Etape" },
+    { orkestra_field: "status", crm_field: "Statut" },
+  ]);
+
+  const orkestraFields = ["email", "first_name", "last_name", "company", "phone", "country", "city", "job_title", "lead_score", "lead_stage", "status"];
+  const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+    try {
+      const [cfg, prev, lg] = await Promise.all([
+        api("/sync/config").catch(() => null),
+        api("/sync/preview?limit=10").catch(() => null),
+        api("/sync/logs?limit=10").catch(() => null),
+      ]);
+      setConfig(cfg);
+      setPreview(prev);
+      setLogs(lg?.logs || []);
+      if (cfg && cfg.host) {
+        setForm(p => ({ ...p, host: cfg.host || p.host, port: cfg.port || p.port, username: cfg.username || p.username, database: cfg.database || p.database, table: cfg.table || p.table, key_field: cfg.key_field || p.key_field }));
+        if (Array.isArray(cfg.field_mapping) && cfg.field_mapping.length > 0) setMapping(cfg.field_mapping);
+      }
+      setIsDirty(false);
+    } catch {}
+    setLoading(false);
+  };
+
+  const updateForm = (patch) => { setForm(f => ({ ...f, ...patch })); setIsDirty(true); };
+
+  const validateConfig = () => {
+    if (!IDENT_RE.test(form.table)) return "Nom de table invalide (alphanumérique + _ uniquement)";
+    if (!IDENT_RE.test(form.key_field)) return "Clé primaire invalide (alphanumérique + _ uniquement)";
+    const seen = new Set();
+    for (const m of mapping) {
+      if (!m.orkestra_field || !m.crm_field) continue;
+      if (seen.has(m.orkestra_field)) return `Champ Orkestra en doublon : ${m.orkestra_field}`;
+      seen.add(m.orkestra_field);
+      if (!IDENT_RE.test(m.crm_field)) return `Nom de champ CRM invalide : ${m.crm_field}`;
+    }
+    return null;
+  };
+
+  const saveConfig = async () => {
+    setTestResult(null);
+    const err = validateConfig();
+    if (err) { setTestResult({ success: false, message: err }); return; }
+    try {
+      await api("/sync/config", {
+        method: "POST",
+        body: JSON.stringify({
+          config: form,
+          field_mapping: mapping.filter(m => m.orkestra_field && m.crm_field),
+        }),
+      });
+      setTestResult({ success: true, message: "Configuration sauvegardée" });
+      await loadData();
+    } catch (e) { setTestResult({ success: false, message: e.message }); }
+  };
+
+  const testConnection = async () => {
+    setTestResult(null);
+    if (isDirty) {
+      setTestResult({ success: false, message: "Sauvegardez d'abord la configuration avant de tester." });
+      return;
+    }
+    try {
+      const r = await api("/sync/test", { method: "POST" });
+      setTestResult(r);
+    } catch (e) { setTestResult({ success: false, message: e.message }); }
+  };
+
+  const executeSync = async () => {
+    setSyncing(true); setSyncResult(null);
+    try {
+      const r = await api("/sync/execute", { method: "POST" });
+      setSyncResult(r);
+      await loadData();
+    } catch (e) { setSyncResult({ success: false, message: e.message }); }
+    setSyncing(false);
+  };
+
+  const addMapping = () => { setMapping(m => [...m, { orkestra_field: "", crm_field: "" }]); setIsDirty(true); };
+  const removeMapping = (i) => { setMapping(m => m.filter((_, idx) => idx !== i)); setIsDirty(true); };
+  const updateMapping = (i, field, value) => {
+    setMapping(m => m.map((row, idx) => idx === i ? { ...row, [field]: value } : row));
+    setIsDirty(true);
+  };
+
+  const switchTab = (id) => { setTab(id); setTestResult(null); setSyncResult(null); };
+
+  if (loading) return <div className="p-8 text-center text-slate-400">Chargement...</div>;
+
+  return (
+    <div className="p-8">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-lg font-bold text-slate-900">Sync CRM</h2>
+          <p className="text-sm text-slate-400">Synchronisez les données Orkestra vers votre CRM</p>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-3 mb-6">
+        {[
+          { id: "config", label: "Configuration", icon: Database },
+          { id: "preview", label: "Preview", icon: Eye },
+          { id: "sync", label: "Synchroniser", icon: ArrowLeftRight },
+          { id: "logs", label: "Historique", icon: Clock },
+        ].map(t => {
+          const Icon = t.icon;
+          return (
+            <button key={t.id} onClick={() => switchTab(t.id)} className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${tab === t.id ? "bg-slate-900 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
+              <Icon size={16} />{t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Config */}
+      {tab === "config" && (
+        <div className="space-y-6 max-w-2xl">
+          <div className="bg-white rounded-2xl border border-slate-100 p-6">
+            <h3 className="text-base font-bold text-slate-900 mb-4">Connexion CRM cible</h3>
+            {config && config.status !== "not_configured" && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm text-emerald-700 mb-4 flex items-center gap-2"><CheckCircle size={16} />Configuration existante détectée</div>
+            )}
+            <div className="space-y-4">
+              <div className="grid grid-cols-3 gap-4">
+                <div className="col-span-2"><label className="text-sm font-medium text-slate-700 mb-1 block">Serveur</label><input value={form.host} onChange={e => updateForm({ host: e.target.value })} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+                <div><label className="text-sm font-medium text-slate-700 mb-1 block">Port</label><input type="number" value={form.port} onChange={e => updateForm({ port: parseInt(e.target.value) || 1433 })} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div><label className="text-sm font-medium text-slate-700 mb-1 block">Utilisateur</label><input value={form.username} onChange={e => updateForm({ username: e.target.value })} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+                <div><label className="text-sm font-medium text-slate-700 mb-1 block">Mot de passe</label><input type="password" value={form.password} onChange={e => updateForm({ password: e.target.value })} placeholder={config && config.status !== "not_configured" ? "••••••• (inchangé)" : ""} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                <div><label className="text-sm font-medium text-slate-700 mb-1 block">Base de données</label><input value={form.database} onChange={e => updateForm({ database: e.target.value })} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+                <div><label className="text-sm font-medium text-slate-700 mb-1 block">Table</label><input value={form.table} onChange={e => updateForm({ table: e.target.value })} pattern="[A-Za-z_][A-Za-z0-9_]*" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+                <div><label className="text-sm font-medium text-slate-700 mb-1 block">Clé primaire CRM</label><input value={form.key_field} onChange={e => updateForm({ key_field: e.target.value })} pattern="[A-Za-z_][A-Za-z0-9_]*" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-100 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-slate-900">Mapping des champs</h3>
+              <button onClick={addMapping} className="flex items-center gap-1 text-sm text-sky-600 hover:text-sky-500"><Plus size={14} />Ajouter</button>
+            </div>
+            <p className="text-sm text-slate-400 mb-4">Choisissez quels champs Orkestra sont envoyés vers quels champs CRM</p>
+            <div className="space-y-3">
+              {mapping.map((m, i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <select value={m.orkestra_field} onChange={e => updateMapping(i, "orkestra_field", e.target.value)} className="flex-1 border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-sky-400">
+                    <option value="">— Champ Orkestra —</option>
+                    {orkestraFields.map(f => <option key={f} value={f}>{f}</option>)}
+                  </select>
+                  <span className="text-slate-300">→</span>
+                  <input value={m.crm_field} onChange={e => updateMapping(i, "crm_field", e.target.value)} placeholder="Champ CRM" className="flex-1 border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-sky-400" />
+                  <button onClick={() => removeMapping(i)} className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={14} /></button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {testResult && <div className={`rounded-xl p-3 text-sm ${testResult.success ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"}`}>{testResult.success ? "✓ " : "✗ "}{testResult.message}</div>}
+
+          <div className="flex gap-3">
+            <button onClick={saveConfig} className="px-5 py-2.5 bg-slate-900 text-white rounded-xl text-sm font-medium hover:bg-slate-800">Sauvegarder</button>
+            <button onClick={testConnection} className="px-5 py-2.5 border border-slate-200 text-slate-700 rounded-xl text-sm font-medium hover:bg-slate-50">Tester la connexion</button>
+          </div>
+        </div>
+      )}
+
+      {/* Preview */}
+      {tab === "preview" && (
+        <div className="bg-white rounded-2xl border border-slate-100 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-base font-bold text-slate-900">Contacts à synchroniser</h3>
+              <p className="text-sm text-slate-400">{preview?.total_syncable || 0} contacts avec un ID CRM externe</p>
+            </div>
+            <button onClick={loadData} className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700"><RefreshCw size={14} />Rafraîchir</button>
+          </div>
+          {preview?.preview?.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead><tr className="bg-slate-50">
+                  <th className="px-3 py-2 text-left font-medium text-slate-600 text-xs">Email</th>
+                  <th className="px-3 py-2 text-left font-medium text-slate-600 text-xs">Nom</th>
+                  <th className="px-3 py-2 text-left font-medium text-slate-600 text-xs">Entreprise</th>
+                  <th className="px-3 py-2 text-left font-medium text-slate-600 text-xs">Score</th>
+                  <th className="px-3 py-2 text-left font-medium text-slate-600 text-xs">Stage</th>
+                  <th className="px-3 py-2 text-left font-medium text-slate-600 text-xs">Statut</th>
+                  <th className="px-3 py-2 text-left font-medium text-slate-600 text-xs">CRM ID</th>
+                </tr></thead>
+                <tbody>
+                  {preview.preview.map((c, i) => (
+                    <tr key={i} className="border-t border-slate-50">
+                      <td className="px-3 py-2 text-slate-700">{c.email}</td>
+                      <td className="px-3 py-2 text-slate-700">{c.first_name} {c.last_name}</td>
+                      <td className="px-3 py-2 text-slate-500">{c.company}</td>
+                      <td className="px-3 py-2"><span className="bg-sky-50 text-sky-700 px-2 py-0.5 rounded-full text-xs font-medium">{c.lead_score}</span></td>
+                      <td className="px-3 py-2 text-slate-500 text-xs">{c.lead_stage}</td>
+                      <td className="px-3 py-2 text-slate-500 text-xs">{c.status}</td>
+                      <td className="px-3 py-2 text-slate-400 text-xs font-mono">{c.external_crm_id && (c.external_crm_id.length > 12 ? c.external_crm_id.slice(0, 12) + "…" : c.external_crm_id)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="text-center text-slate-400 py-8">
+              <AlertCircle size={32} className="mx-auto mb-2 opacity-30" />
+              <p className="text-sm">Aucun contact avec un ID CRM externe. Importez d'abord des contacts via le Mapping DB.</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Sync */}
+      {tab === "sync" && (
+        <div className="max-w-xl">
+          <div className="bg-white rounded-2xl border border-slate-100 p-6">
+            <h3 className="text-base font-bold text-slate-900 mb-2">Lancer la synchronisation</h3>
+            <p className="text-sm text-slate-400 mb-6">Les données modifiées dans Orkestra seront envoyées vers le CRM cible via le mapping configuré.</p>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-700 mb-6">
+              <div className="font-medium mb-1">Attention</div>
+              Cette action va modifier les données dans votre CRM. Vérifiez la preview avant de lancer.
+            </div>
+
+            <div className="flex items-center gap-4 mb-6 p-4 bg-slate-50 rounded-xl">
+              <div className="text-center flex-1">
+                <div className="text-2xl font-bold text-slate-900">{preview?.total_syncable || 0}</div>
+                <div className="text-xs text-slate-500">Contacts à sync</div>
+              </div>
+              <ArrowLeftRight size={20} className="text-slate-300" />
+              <div className="text-center flex-1">
+                <div className="text-sm font-medium text-slate-700">{form.database}</div>
+                <div className="text-xs text-slate-500">{form.table}</div>
+              </div>
+            </div>
+
+            {syncResult && (
+              <div className={`rounded-xl p-4 text-sm mb-4 ${syncResult.errors === 0 || syncResult.status === "completed" ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-amber-50 text-amber-700 border border-amber-200"}`}>
+                <div className="font-medium mb-1">{syncResult.message}</div>
+                {syncResult.duration_seconds && <div className="text-xs opacity-70">Durée : {syncResult.duration_seconds}s</div>}
+                {syncResult.error_details?.length > 0 && (
+                  <div className="mt-2 text-xs">{syncResult.error_details.map((e, i) => <div key={i}>{e}</div>)}</div>
+                )}
+              </div>
+            )}
+
+            <button onClick={executeSync} disabled={syncing || !preview?.total_syncable} className="w-full py-3 bg-slate-900 text-white rounded-xl text-sm font-medium hover:bg-slate-800 disabled:opacity-50 flex items-center justify-center gap-2">
+              {syncing ? <><Loader2 size={16} className="animate-spin" />Synchronisation en cours...</> : <><ArrowLeftRight size={16} />Synchroniser {preview?.total_syncable || 0} contacts</>}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Logs */}
+      {tab === "logs" && (
+        <div className="bg-white rounded-2xl border border-slate-100 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-base font-bold text-slate-900">Historique des synchronisations</h3>
+            <button onClick={loadData} className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700"><RefreshCw size={14} />Rafraîchir</button>
+          </div>
+          {logs.length > 0 ? (
+            <div className="space-y-3">
+              {logs.map((log, i) => (
+                <div key={i} className="flex items-center justify-between p-4 border border-slate-100 rounded-xl">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${log.error_count === 0 ? "bg-emerald-50" : "bg-amber-50"}`}>
+                      {log.error_count === 0 ? <CheckCircle size={16} className="text-emerald-600" /> : <AlertCircle size={16} className="text-amber-600" />}
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-slate-700">{log.source}</div>
+                      <div className="text-xs text-slate-400">{log.direction === "orkestra_to_crm" ? "Orkestra → CRM" : log.direction}</div>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm text-slate-700">{log.success_count}/{log.total_records} contacts</div>
+                    <div className="text-xs text-slate-400">{log.started_at ? new Date(log.started_at).toLocaleString("fr-FR") : "—"} · {log.duration_seconds ? `${log.duration_seconds}s` : ""}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center text-slate-400 py-8">
+              <Clock size={32} className="mx-auto mb-2 opacity-30" />
+              <p className="text-sm">Aucune synchronisation effectuée</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════
+// AI ASSISTANT (O.S ✦)
+// ══════════════════════════════════════════════════════════
+
+// Rendu markdown minimal : **gras**, listes (-, *, 1.), sauts de ligne préservés
+function renderMarkdown(text) {
+  const lines = text.split("\n");
+  const out = [];
+  let listBuffer = [];
+  const flushList = () => {
+    if (listBuffer.length) {
+      out.push(<ul key={`ul-${out.length}`} className="list-disc pl-5 my-1 space-y-0.5">{listBuffer}</ul>);
+      listBuffer = [];
+    }
+  };
+  const formatInline = (s) => {
+    const parts = s.split(/(\*\*[^*]+\*\*)/g);
+    return parts.map((p, i) => p.startsWith("**") && p.endsWith("**")
+      ? <strong key={i}>{p.slice(2, -2)}</strong>
+      : <span key={i}>{p}</span>);
+  };
+  lines.forEach((line, i) => {
+    const m = line.match(/^\s*(?:[-*]|\d+\.)\s+(.*)$/);
+    if (m) {
+      listBuffer.push(<li key={`li-${i}`}>{formatInline(m[1])}</li>);
+    } else {
+      flushList();
+      if (line.trim() === "") out.push(<div key={i} className="h-2" />);
+      else out.push(<div key={i}>{formatInline(line)}</div>);
+    }
+  });
+  flushList();
+  return out;
+}
+
+function AIAssistant() {
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState([
+    { role: "assistant", content: "Bonjour ! Je suis l'assistant IA d'Orkestra. Je peux vous aider à gérer vos contacts, campagnes, segments et templates. Que voulez-vous faire ?" }
+  ]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages, loading, open]);
+
+  const sendText = async (text) => {
+    const userMsg = (text || "").trim();
+    if (!userMsg || loading) return;
+    setInput("");
+    setLoading(true);
+
+    // Construit l'historique à partir du state courant (ignore le message d'accueil idx=0)
+    let payloadMessages = [];
+    setMessages(prev => {
+      const history = prev.slice(1).map(m => ({ role: m.role, content: m.content }));
+      payloadMessages = [...history, { role: "user", content: userMsg }];
+      return [...prev, { role: "user", content: userMsg }];
+    });
+
+    try {
+      const data = await api("/ai/chat", {
+        method: "POST",
+        body: JSON.stringify({ messages: payloadMessages }),
+      });
+      const aiReply = data?.reply || "Désolé, je n'ai pas pu traiter votre demande.";
+      setMessages(prev => [...prev, { role: "assistant", content: aiReply }]);
+    } catch (err) {
+      setMessages(prev => [...prev, { role: "assistant", content: "Erreur : " + (err.message || "Connexion impossible") }]);
+    }
+    setLoading(false);
+  };
+
+  const sendMessage = () => sendText(input);
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  };
+
+  return (
+    <>
+      {/* Bouton flottant O.S Rainbow */}
+      <button
+        onClick={() => setOpen(!open)}
+        aria-label={open ? "Fermer l'assistant IA" : "Ouvrir l'assistant IA"}
+        aria-expanded={open}
+        className="fixed bottom-6 right-6 z-50 group"
+        style={{ outline: "none" }}
+      >
+        <div style={{
+          padding: "3px",
+          borderRadius: "999px",
+          background: open ? "transparent" : "linear-gradient(135deg, #ec4899, #8b5cf6, #06b6d4, #10b981)",
+          boxShadow: open ? "none" : "0 0 24px rgba(139,92,246,0.25), 0 0 48px rgba(236,72,153,0.15)",
+          transition: "all 0.3s ease",
+        }}>
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            padding: open ? "12px" : "12px 22px",
+            borderRadius: "999px",
+            background: open ? "#ef4444" : "#1e293b",
+            cursor: "pointer",
+            transition: "all 0.3s ease",
+          }}>
+            {open ? (
+              <X size={20} color="white" />
+            ) : (
+              <>
+                <span style={{ color: "white", fontWeight: 700, fontSize: "16px", letterSpacing: "-0.5px" }}>O.S</span>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                  <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.582a.5.5 0 0 1 0 .963L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z" fill="rgba(255,255,255,0.9)"/>
+                  <path d="M20 3v3" stroke="rgba(255,255,255,0.6)" strokeWidth="1.5" strokeLinecap="round"/>
+                  <path d="M21.5 4.5h-3" stroke="rgba(255,255,255,0.6)" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+              </>
+            )}
+          </div>
+        </div>
+      </button>
+
+      {/* Panneau chat */}
+      {open && (
+        <div className="fixed bottom-24 right-6 z-50 w-96 bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col" style={{ height: "520px" }}>
+          {/* Header */}
+          <div className="flex items-center gap-3 p-4 border-b border-slate-100">
+            <div style={{
+              padding: "2px",
+              borderRadius: "999px",
+              background: "linear-gradient(135deg, #ec4899, #8b5cf6, #06b6d4, #10b981)",
+            }}>
+              <div style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+                padding: "4px 10px",
+                borderRadius: "999px",
+                background: "#1e293b",
+              }}>
+                <span style={{ color: "white", fontWeight: 700, fontSize: "11px" }}>O.S</span>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="rgba(255,255,255,0.9)"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.582a.5.5 0 0 1 0 .963L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/></svg>
+              </div>
+            </div>
+            <div>
+              <div className="text-sm font-bold text-slate-900">Assistant IA</div>
+              <div className="text-xs text-slate-400">Powered by OpenSID</div>
+            </div>
+          </div>
+
+          {/* Messages */}
+          <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3" id="ai-chat-messages">
+            {messages.map((msg, i) => (
+              <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm ${
+                  msg.role === "user"
+                    ? "bg-slate-900 text-white rounded-br-md"
+                    : "bg-slate-100 text-slate-700 rounded-bl-md"
+                }`}>
+                  {msg.role === "assistant" ? renderMarkdown(msg.content) : msg.content}
+                </div>
+              </div>
+            ))}
+            {loading && (
+              <div className="flex justify-start">
+                <div className="bg-slate-100 rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-2">
+                  <Loader2 size={14} className="animate-spin text-slate-400" />
+                  <span className="text-sm text-slate-400">Réflexion...</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Suggestions rapides */}
+          {messages.length <= 1 && (
+            <div className="px-4 pb-2 flex flex-wrap gap-2">
+              {[
+                "Combien de contacts actifs ?",
+                "Liste mes campagnes",
+                "Crée un segment VIP",
+                "Résumé analytics 30j",
+              ].map((s, i) => (
+                <button key={i} onClick={() => sendText(s)} disabled={loading} className="text-xs bg-slate-50 border border-slate-200 text-slate-600 px-3 py-1.5 rounded-full hover:bg-slate-100 disabled:opacity-50 transition-colors">{s}</button>
+              ))}
+            </div>
+          )}
+
+          {/* Input */}
+          <div className="p-3 border-t border-slate-100">
+            <div className="flex gap-2">
+              <input
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Demandez à l'IA..."
+                className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400"
+                disabled={loading}
+              />
+              <button
+                onClick={sendMessage}
+                disabled={loading || !input.trim()}
+                aria-label="Envoyer le message"
+                className="px-3 py-2.5 bg-slate-900 text-white rounded-xl hover:bg-slate-800 disabled:opacity-30 transition-colors"
+              >
+                <Send size={16} />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ══════════════════════════════════════════════════════════
 // MAIN APP
 // ══════════════════════════════════════════════════════════
 
@@ -1499,11 +2044,12 @@ export default function App() {
     { id: "analytics", label: "Analytics", icon: BarChart3 },
     { id: "import", label: "Import CSV", icon: Upload },
     { id: "mapping", label: "Mapping DB", icon: Layers },
+    { id: "sync", label: "Sync CRM", icon: ArrowLeftRight },
     { id: "diffusion", label: "Diffusion", icon: Radio },
     { id: "integrations", label: "Intégrations", icon: Link2 },
   ];
 
-  const pages = { dashboard: DashboardPage, contacts: ContactsPage, campaigns: CampaignsPage, segments: SegmentsPage, templates: TemplatesPage, analytics: AnalyticsPage, integrations: IntegrationsPage, mapping: MappingPage, diffusion: DiffusionPage, import: ImportCSVPage };
+  const pages = { dashboard: DashboardPage, contacts: ContactsPage, campaigns: CampaignsPage, segments: SegmentsPage, templates: TemplatesPage, analytics: AnalyticsPage, integrations: IntegrationsPage, mapping: MappingPage, diffusion: DiffusionPage, import: ImportCSVPage, sync: SyncCRMPage };
   const Page = pages[activeNav];
 
   return (
@@ -1519,6 +2065,7 @@ export default function App() {
         {Page ? <Page /> : <div className="p-8 flex items-center justify-center h-96"><div className="text-center"><div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-4"><Zap size={24} className="text-slate-400"/></div><h3 className="text-lg font-semibold text-slate-700">En construction</h3></div></div>}
         <div className="px-8 pb-6 mt-4 text-center text-xs text-slate-300">OS Orkestra v1.0.0 · © 2026 OpenSID</div>
       </main>
+      <AIAssistant />
     </div>
   );
 }
