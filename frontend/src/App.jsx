@@ -670,7 +670,7 @@ function IntegrationsPage() {
   const [configuring, setConfiguring] = useState(null); // type being configured
   const [formData, setFormData] = useState({});
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState(null);
+  const [actionResult, setActionResult] = useState(null);
   const [saving, setSaving] = useState(false);
 
   const load = async () => {
@@ -684,17 +684,17 @@ function IntegrationsPage() {
   const openConfig = (type) => {
     setConfiguring(type);
     setFormData({});
-    setTestResult(null);
+    setActionResult(null);
   };
 
   const handleTest = async () => {
-    setTesting(true); setTestResult(null);
+    setTesting(true); setActionResult(null);
     try {
       const result = await api("/integrations/test-connection", {
         method: "POST", body: JSON.stringify({ type: configuring, config: formData }),
       });
-      setTestResult(result);
-    } catch (err) { setTestResult({ success: false, message: err.message }); }
+      setActionResult(result);
+    } catch (err) { setActionResult({ success: false, message: err.message }); }
     setTesting(false);
   };
 
@@ -798,9 +798,9 @@ function IntegrationsPage() {
           ))}
 
           {/* Test result */}
-          {testResult && (
-            <div className={`rounded-xl p-4 text-sm ${testResult.success ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
-              {testResult.success ? "✓ " : "✗ "}{testResult.message}
+          {actionResult && (
+            <div className={`rounded-xl p-4 text-sm ${actionResult.success ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
+              {actionResult.success ? "✓ " : "✗ "}{actionResult.message}
             </div>
           )}
 
@@ -963,24 +963,65 @@ function DiffusionPage() {
   const [smsForm, setSmsForm] = useState({ provider: "twilio", api_key: "", api_secret: "", from_number: "" });
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState(null);
+  const [actionResult, setActionResult] = useState(null);
   const [testEmail, setTestEmail] = useState("");
   const [sendingTest, setSendingTest] = useState(false);
   const [sendResult, setSendResult] = useState(null);
 
-  useEffect(() => { api("/diffusion/config").then(d => { setConfig(d || {}); setLoading(false); }).catch(() => setLoading(false)); }, []);
+  useEffect(() => {
+    api("/diffusion/config").then(d => {
+      setConfig(d || {});
+      // Pré-remplir les formulaires avec la config sauvée
+      if (d?.smtp && d.smtp.status !== "not_configured") {
+        setSmtpForm(prev => ({
+          ...prev,
+          host: d.smtp.host || prev.host,
+          port: d.smtp.port || prev.port,
+          username: d.smtp.username || prev.username,
+          password: "", // Ne jamais pré-remplir le mot de passe (masqué côté API)
+          use_tls: d.smtp.use_tls !== undefined ? d.smtp.use_tls : prev.use_tls,
+          from_email: d.smtp.from_email || prev.from_email,
+          from_name: d.smtp.from_name || prev.from_name,
+        }));
+      }
+      if (d?.whatsapp && d.whatsapp.status !== "not_configured") {
+        setWhatsappForm(prev => ({
+          ...prev,
+          phone_number_id: d.whatsapp.phone_number_id || prev.phone_number_id,
+        }));
+      }
+      if (d?.sms && d.sms.status !== "not_configured") {
+        setSmsForm(prev => ({
+          ...prev,
+          provider: d.sms.provider || prev.provider,
+          from_number: d.sms.from_number || prev.from_number,
+        }));
+      }
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, []);
+
+  const reloadConfig = async () => {
+    try { const d = await api("/diffusion/config"); setConfig(d || {}); } catch {}
+  };
 
   const saveSmtp = async () => {
-    setSaving(true); setTestResult(null);
-    try { await api("/diffusion/config/smtp", { method: "POST", body: JSON.stringify(smtpForm) }); setTestResult({ success: true, message: "Configuration SMTP sauvegardée" }); }
-    catch (err) { setTestResult({ success: false, message: err.message }); }
+    setSaving(true); setActionResult(null);
+    try {
+      await api("/diffusion/config/smtp", { method: "POST", body: JSON.stringify(smtpForm) });
+      await reloadConfig();
+      setActionResult({ success: true, message: "Configuration SMTP sauvegardée" });
+    } catch (err) { setActionResult({ success: false, message: err.message }); }
     setSaving(false);
   };
 
   const testSmtp = async () => {
-    setTesting(true); setTestResult(null);
-    try { const r = await api("/diffusion/test-smtp", { method: "POST" }); setTestResult(r); }
-    catch (err) { setTestResult({ success: false, message: err.message }); }
+    setTesting(true); setActionResult(null);
+    try {
+      const r = await api("/diffusion/test-smtp", { method: "POST" });
+      await reloadConfig();
+      setActionResult(r);
+    } catch (err) { setActionResult({ success: false, message: err.message }); }
     setTesting(false);
   };
 
@@ -995,46 +1036,87 @@ function DiffusionPage() {
   };
 
   const saveWhatsapp = async () => {
-    setSaving(true);
-    try { await api("/diffusion/config/whatsapp", { method: "POST", body: JSON.stringify(whatsappForm) }); alert("WhatsApp configuré"); }
-    catch (err) { alert("Erreur: " + err.message); }
+    setSaving(true); setActionResult(null);
+    try {
+      await api("/diffusion/config/whatsapp", { method: "POST", body: JSON.stringify(whatsappForm) });
+      await reloadConfig();
+      setActionResult({ success: true, message: "WhatsApp configuré" });
+    } catch (err) { setActionResult({ success: false, message: err.message }); }
     setSaving(false);
   };
 
   const saveSms = async () => {
-    setSaving(true);
-    try { await api("/diffusion/config/sms", { method: "POST", body: JSON.stringify(smsForm) }); alert("SMS configuré"); }
-    catch (err) { alert("Erreur: " + err.message); }
+    setSaving(true); setActionResult(null);
+    try {
+      await api("/diffusion/config/sms", { method: "POST", body: JSON.stringify(smsForm) });
+      await reloadConfig();
+      setActionResult({ success: true, message: "SMS configuré" });
+    } catch (err) { setActionResult({ success: false, message: err.message }); }
     setSaving(false);
   };
 
+  const getStatus = (key) => {
+    const c = config[key];
+    if (!c || c.status === "not_configured") return { label: "Non configuré", color: "bg-slate-100 text-slate-500", dot: "bg-slate-300" };
+    if (c.status === "connected") return { label: "Connecté", color: "bg-emerald-50 text-emerald-700", dot: "bg-emerald-500" };
+    if (c.status === "configured") return { label: "Configuré", color: "bg-sky-50 text-sky-700", dot: "bg-sky-500" };
+    if (c.status === "error") return { label: "Erreur", color: "bg-red-50 text-red-700", dot: "bg-red-500" };
+    return { label: c.status || "—", color: "bg-slate-100 text-slate-500", dot: "bg-slate-300" };
+  };
+
   const tabs = [
-    { id: "email", label: "Email (SMTP)", icon: Mail, color: "text-sky-600 bg-sky-50" },
-    { id: "whatsapp", label: "WhatsApp", icon: Send, color: "text-green-600 bg-green-50" },
-    { id: "sms", label: "SMS", icon: Radio, color: "text-amber-600 bg-amber-50" },
+    { id: "email", label: "Email (SMTP)", icon: Mail, configKey: "smtp" },
+    { id: "whatsapp", label: "WhatsApp", icon: Send, configKey: "whatsapp" },
+    { id: "sms", label: "SMS", icon: Radio, configKey: "sms" },
   ];
+
+  if (loading) return <div className="p-8 text-center text-slate-400">Chargement...</div>;
 
   return (
     <div className="p-8">
       <div className="mb-6"><h2 className="text-xl font-bold text-slate-900">Diffusion</h2><p className="text-sm text-slate-400 mt-1">Configurez vos canaux d'envoi</p></div>
 
+      {/* Bandeau statut */}
+      <div className="grid grid-cols-3 gap-4 mb-6">
+        {tabs.map(t => {
+          const Icon = t.icon;
+          const st = getStatus(t.configKey);
+          const c = config[t.configKey] || {};
+          return (
+            <div key={t.id} className={`rounded-2xl border p-4 ${activeTab === t.id ? "border-slate-300 bg-white shadow-sm" : "border-slate-100 bg-white"}`}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2"><Icon size={16} className="text-slate-500" /><span className="text-sm font-medium text-slate-700">{t.label}</span></div>
+                <span className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${st.color}`}><span className={`w-1.5 h-1.5 rounded-full ${st.dot}`}/>{st.label}</span>
+              </div>
+              {c.host && <div className="text-xs text-slate-400">{c.host}{c.port ? `:${c.port}` : ""}</div>}
+              {c.username && <div className="text-xs text-slate-400 truncate">{c.username}</div>}
+              {c.phone_number_id && <div className="text-xs text-slate-400">ID: {c.phone_number_id}</div>}
+              {c.last_tested && <div className="text-xs text-slate-300 mt-1">Testé: {new Date(c.last_tested).toLocaleString("fr-FR")}</div>}
+              {c.configured_at && !c.last_tested && <div className="text-xs text-slate-300 mt-1">Configuré: {new Date(c.configured_at).toLocaleString("fr-FR")}</div>}
+            </div>
+          );
+        })}
+      </div>
+
       <div className="flex gap-3 mb-6">{tabs.map(t => { const Icon = t.icon; return (
-        <button key={t.id} onClick={() => { setActiveTab(t.id); setTestResult(null); setSendResult(null); }} className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${activeTab === t.id ? "bg-slate-900 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
+        <button key={t.id} onClick={() => { setActiveTab(t.id); setActionResult(null); setSendResult(null); }} className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${activeTab === t.id ? "bg-slate-900 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
           <Icon size={16}/>{t.label}
-          {config[t.id === "email" ? "smtp" : t.id]?.status === "connected" && <span className="w-2 h-2 rounded-full bg-emerald-400"/>}
         </button>);})}</div>
 
       {activeTab === "email" && (
         <div className="bg-white rounded-2xl border border-slate-100 p-6 max-w-2xl">
           <h3 className="text-base font-bold text-slate-900 mb-4">Configuration SMTP</h3>
+          {config.smtp?.status && config.smtp.status !== "not_configured" && (
+            <div className="bg-sky-50 border border-sky-100 rounded-xl p-3 text-sm text-sky-700 mb-4">Configuration existante détectée — modifiez les champs si nécessaire. Laissez le mot de passe vide pour garder l'ancien.</div>
+          )}
           <div className="space-y-4">
             <div className="grid grid-cols-3 gap-4">
               <div className="col-span-2"><label className="text-sm font-medium text-slate-700 mb-1 block">Serveur SMTP</label><input value={smtpForm.host} onChange={e => setSmtpForm({...smtpForm, host: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
-              <div><label className="text-sm font-medium text-slate-700 mb-1 block">Port</label><input type="number" value={smtpForm.port} onChange={e => setSmtpForm({...smtpForm, port: parseInt(e.target.value)})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+              <div><label className="text-sm font-medium text-slate-700 mb-1 block">Port</label><input type="number" value={smtpForm.port} onChange={e => setSmtpForm({...smtpForm, port: parseInt(e.target.value) || 587})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div><label className="text-sm font-medium text-slate-700 mb-1 block">Email / Login</label><input value={smtpForm.username} onChange={e => setSmtpForm({...smtpForm, username: e.target.value})} placeholder="votre@gmail.com" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
-              <div><label className="text-sm font-medium text-slate-700 mb-1 block">Mot de passe / App Password</label><input type="password" value={smtpForm.password} onChange={e => setSmtpForm({...smtpForm, password: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+              <div><label className="text-sm font-medium text-slate-700 mb-1 block">Mot de passe / App Password</label><input type="password" value={smtpForm.password} onChange={e => setSmtpForm({...smtpForm, password: e.target.value})} placeholder={config.smtp?.status !== "not_configured" ? "••••••• (inchangé)" : ""} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div><label className="text-sm font-medium text-slate-700 mb-1 block">Email expéditeur</label><input value={smtpForm.from_email} onChange={e => setSmtpForm({...smtpForm, from_email: e.target.value})} placeholder="noreply@opensid.com" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
@@ -1042,7 +1124,7 @@ function DiffusionPage() {
             </div>
             <div className="flex items-center gap-2"><input type="checkbox" checked={smtpForm.use_tls} onChange={e => setSmtpForm({...smtpForm, use_tls: e.target.checked})} className="rounded" /><label className="text-sm text-slate-600">Utiliser TLS (recommandé)</label></div>
 
-            {testResult && <div className={`rounded-xl p-3 text-sm ${testResult.success ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"}`}>{testResult.success ? "✓ " : "✗ "}{testResult.message}</div>}
+            {actionResult && <div className={`rounded-xl p-3 text-sm ${actionResult.success ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"}`}>{actionResult.success ? "✓ " : "✗ "}{actionResult.message}</div>}
 
             <div className="flex gap-3">
               <button onClick={saveSmtp} disabled={saving} className="px-5 py-2.5 bg-slate-900 text-white rounded-xl text-sm font-medium hover:bg-slate-800 disabled:opacity-50">{saving ? "..." : "Sauvegarder"}</button>
@@ -1066,8 +1148,9 @@ function DiffusionPage() {
           <h3 className="text-base font-bold text-slate-900 mb-4">WhatsApp Business API</h3>
           <p className="text-sm text-slate-400 mb-4">Nécessite un compte Meta Business avec l'API WhatsApp activée.</p>
           <div className="space-y-4">
-            <div><label className="text-sm font-medium text-slate-700 mb-1 block">API Token (Meta)</label><input type="password" value={whatsappForm.api_token} onChange={e => setWhatsappForm({...whatsappForm, api_token: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+            <div><label className="text-sm font-medium text-slate-700 mb-1 block">API Token (Meta)</label><input type="password" value={whatsappForm.api_token} onChange={e => setWhatsappForm({...whatsappForm, api_token: e.target.value})} placeholder={config.whatsapp?.status !== "not_configured" ? "••••••• (inchangé)" : ""} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
             <div><label className="text-sm font-medium text-slate-700 mb-1 block">Phone Number ID</label><input value={whatsappForm.phone_number_id} onChange={e => setWhatsappForm({...whatsappForm, phone_number_id: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+            {actionResult && activeTab === "whatsapp" && <div className={`rounded-xl p-3 text-sm ${actionResult.success ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"}`}>{actionResult.success ? "✓ " : "✗ "}{actionResult.message}</div>}
             <button onClick={saveWhatsapp} disabled={saving} className="px-5 py-2.5 bg-green-600 text-white rounded-xl text-sm font-medium hover:bg-green-500 disabled:opacity-50">{saving ? "..." : "Sauvegarder"}</button>
           </div>
         </div>
@@ -1079,10 +1162,11 @@ function DiffusionPage() {
           <div className="space-y-4">
             <div><label className="text-sm font-medium text-slate-700 mb-1 block">Fournisseur</label><select value={smsForm.provider} onChange={e => setSmsForm({...smsForm, provider: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400"><option value="twilio">Twilio</option><option value="vonage">Vonage</option></select></div>
             <div className="grid grid-cols-2 gap-4">
-              <div><label className="text-sm font-medium text-slate-700 mb-1 block">API Key</label><input type="password" value={smsForm.api_key} onChange={e => setSmsForm({...smsForm, api_key: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
-              <div><label className="text-sm font-medium text-slate-700 mb-1 block">API Secret</label><input type="password" value={smsForm.api_secret} onChange={e => setSmsForm({...smsForm, api_secret: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+              <div><label className="text-sm font-medium text-slate-700 mb-1 block">API Key</label><input type="password" value={smsForm.api_key} onChange={e => setSmsForm({...smsForm, api_key: e.target.value})} placeholder={config.sms?.status !== "not_configured" ? "••••••• (inchangé)" : ""} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+              <div><label className="text-sm font-medium text-slate-700 mb-1 block">API Secret</label><input type="password" value={smsForm.api_secret} onChange={e => setSmsForm({...smsForm, api_secret: e.target.value})} placeholder={config.sms?.status !== "not_configured" ? "••••••• (inchangé)" : ""} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
             </div>
             <div><label className="text-sm font-medium text-slate-700 mb-1 block">Numéro expéditeur</label><input value={smsForm.from_number} onChange={e => setSmsForm({...smsForm, from_number: e.target.value})} placeholder="+33612345678" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
+            {actionResult && activeTab === "sms" && <div className={`rounded-xl p-3 text-sm ${actionResult.success ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"}`}>{actionResult.success ? "✓ " : "✗ "}{actionResult.message}</div>}
             <button onClick={saveSms} disabled={saving} className="px-5 py-2.5 bg-amber-600 text-white rounded-xl text-sm font-medium hover:bg-amber-500 disabled:opacity-50">{saving ? "..." : "Sauvegarder"}</button>
           </div>
         </div>

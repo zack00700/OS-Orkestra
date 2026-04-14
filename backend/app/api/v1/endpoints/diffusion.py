@@ -152,14 +152,24 @@ async def get_diffusion_config(
     }
 
 
+def _preserve_secrets(new_config: dict, existing: dict, secret_keys) -> dict:
+    """Si un secret est vide dans new_config mais présent dans existing, conserve l'ancien."""
+    for k in secret_keys:
+        if not new_config.get(k) and existing.get(k):
+            new_config[k] = existing[k]
+    return new_config
+
+
 @router.post("/config/smtp")
 async def configure_smtp(
     data: SMTPConfig,
     db=Depends(get_db),
     current_user: dict = Depends(require_roles("admin")),
 ):
-    """Configure le serveur SMTP (persisté en DB)."""
+    """Configure le serveur SMTP (persisté en DB). Password vide = garde l'ancien."""
     config = data.model_dump()
+    existing = await _get_config(db, "smtp_config")
+    config = _preserve_secrets(config, existing, ("password",))
     config["status"] = "configured"
     config["configured_at"] = datetime.now(timezone.utc).isoformat()
     await _set_config(db, "smtp_config", config)
@@ -172,8 +182,10 @@ async def configure_whatsapp(
     db=Depends(get_db),
     current_user: dict = Depends(require_roles("admin")),
 ):
-    """Configure l'API WhatsApp Business (persisté en DB)."""
+    """Configure l'API WhatsApp Business (persisté en DB). API token vide = garde l'ancien."""
     config = data.model_dump()
+    existing = await _get_config(db, "whatsapp_config")
+    config = _preserve_secrets(config, existing, ("api_token",))
     config["status"] = "configured"
     await _set_config(db, "whatsapp_config", config)
     return {"status": "saved", "message": "WhatsApp Business configuré"}
@@ -185,8 +197,10 @@ async def configure_sms(
     db=Depends(get_db),
     current_user: dict = Depends(require_roles("admin")),
 ):
-    """Configure le provider SMS (persisté en DB)."""
+    """Configure le provider SMS (persisté en DB). api_key/api_secret vides = garde les anciens."""
     config = data.model_dump()
+    existing = await _get_config(db, "sms_config")
+    config = _preserve_secrets(config, existing, ("api_key", "api_secret"))
     config["status"] = "configured"
     await _set_config(db, "sms_config", config)
     return {"status": "saved", "message": f"SMS configuré ({data.provider})"}

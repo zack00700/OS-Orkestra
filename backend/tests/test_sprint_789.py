@@ -108,6 +108,38 @@ async def test_diffusion_smtp_persists(client: AsyncClient, auth_headers: dict):
     assert smtp_cfg.get("status") == "configured"
 
 
+@pytest.mark.asyncio
+async def test_diffusion_smtp_preserves_password_when_empty(client: AsyncClient, auth_headers: dict):
+    """Si password vide lors d'un second POST, l'ancien est conservé."""
+    from app.api.v1.endpoints import diffusion
+    diffusion._config_cache.clear()
+
+    # Premier save avec password
+    await client.post(
+        "/api/v1/diffusion/config/smtp",
+        json={
+            "host": "smtp.example.com", "port": 587, "username": "user@example.com",
+            "password": "original_secret", "from_email": "a@b.com", "from_name": "X", "use_tls": True,
+        },
+        headers=auth_headers,
+    )
+
+    # Second save avec password vide
+    await client.post(
+        "/api/v1/diffusion/config/smtp",
+        json={
+            "host": "smtp.newhost.com", "port": 465, "username": "user@example.com",
+            "password": "", "from_email": "a@b.com", "from_name": "X", "use_tls": False,
+        },
+        headers=auth_headers,
+    )
+
+    # Vérifier directement en cache que le password original est conservé
+    assert diffusion._config_cache["smtp_config"]["password"] == "original_secret"
+    assert diffusion._config_cache["smtp_config"]["host"] == "smtp.newhost.com"
+    assert diffusion._config_cache["smtp_config"]["use_tls"] is False
+
+
 # ══════════════════════════════════════════════════════════
 # SPRINT 9 — CSV Import
 # ══════════════════════════════════════════════════════════
