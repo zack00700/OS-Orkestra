@@ -17,6 +17,7 @@ async def test_ai_chat_missing_api_key(client: AsyncClient, auth_headers: dict, 
     """Sans ANTHROPIC_API_KEY → 500."""
     from app.api.v1.endpoints import ai_chat
     monkeypatch.setattr(ai_chat, "ANTHROPIC_API_KEY", "")
+    ai_chat._rate_buckets.clear()
     resp = await client.post(
         "/api/v1/ai/chat",
         json={"messages": [{"role": "user", "content": "hi"}]},
@@ -30,6 +31,7 @@ async def test_ai_chat_invalid_role_rejected(client: AsyncClient, auth_headers: 
     """Role invalide rejeté par Pydantic (422)."""
     from app.api.v1.endpoints import ai_chat
     monkeypatch.setattr(ai_chat, "ANTHROPIC_API_KEY", "dummy")
+    ai_chat._rate_buckets.clear()
     resp = await client.post(
         "/api/v1/ai/chat",
         json={"messages": [{"role": "system", "content": "hi"}]},
@@ -40,15 +42,16 @@ async def test_ai_chat_invalid_role_rejected(client: AsyncClient, auth_headers: 
 
 @pytest.mark.asyncio
 async def test_ai_chat_empty_content_rejected(client: AsyncClient, auth_headers: dict, monkeypatch):
-    """Content vide rejeté."""
+    """Content vide uniquement → 400 (pas de message valide)."""
     from app.api.v1.endpoints import ai_chat
     monkeypatch.setattr(ai_chat, "ANTHROPIC_API_KEY", "dummy")
+    ai_chat._rate_buckets.clear()
     resp = await client.post(
         "/api/v1/ai/chat",
         json={"messages": [{"role": "user", "content": ""}]},
         headers=auth_headers,
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -56,6 +59,7 @@ async def test_ai_chat_oversized_content_rejected(client: AsyncClient, auth_head
     """Content > MAX_MESSAGE_CHARS rejeté."""
     from app.api.v1.endpoints import ai_chat
     monkeypatch.setattr(ai_chat, "ANTHROPIC_API_KEY", "dummy")
+    ai_chat._rate_buckets.clear()
     huge = "a" * (ai_chat.MAX_MESSAGE_CHARS + 1)
     resp = await client.post(
         "/api/v1/ai/chat",

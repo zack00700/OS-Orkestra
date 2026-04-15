@@ -967,6 +967,9 @@ function DiffusionPage() {
   const [testEmail, setTestEmail] = useState("");
   const [sendingTest, setSendingTest] = useState(false);
   const [sendResult, setSendResult] = useState(null);
+  const [testPhone, setTestPhone] = useState("");
+  const [sendingWa, setSendingWa] = useState(false);
+  const [waTestResult, setWaTestResult] = useState(null);
 
   useEffect(() => {
     api("/diffusion/config").then(d => {
@@ -1043,6 +1046,16 @@ function DiffusionPage() {
       setActionResult({ success: true, message: "WhatsApp configuré" });
     } catch (err) { setActionResult({ success: false, message: err.message }); }
     setSaving(false);
+  };
+
+  const sendTestWhatsapp = async () => {
+    if (!testPhone.trim()) { setWaTestResult({ success: false, message: "Entrez un numéro" }); return; }
+    setSendingWa(true); setWaTestResult(null);
+    try {
+      const r = await api("/whatsapp/send-test", { method: "POST", body: JSON.stringify({ to_phone: testPhone.trim() }) });
+      setWaTestResult(r);
+    } catch (err) { setWaTestResult({ success: false, message: err.message }); }
+    setSendingWa(false);
   };
 
   const saveSms = async () => {
@@ -1152,6 +1165,16 @@ function DiffusionPage() {
             <div><label className="text-sm font-medium text-slate-700 mb-1 block">Phone Number ID</label><input value={whatsappForm.phone_number_id} onChange={e => setWhatsappForm({...whatsappForm, phone_number_id: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" /></div>
             {actionResult && activeTab === "whatsapp" && <div className={`rounded-xl p-3 text-sm ${actionResult.success ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"}`}>{actionResult.success ? "✓ " : "✗ "}{actionResult.message}</div>}
             <button onClick={saveWhatsapp} disabled={saving} className="px-5 py-2.5 bg-green-600 text-white rounded-xl text-sm font-medium hover:bg-green-500 disabled:opacity-50">{saving ? "..." : "Sauvegarder"}</button>
+
+            <div className="border-t border-slate-100 pt-4 mt-4">
+              <h4 className="text-sm font-bold text-slate-700 mb-2">Envoyer un message test</h4>
+              <p className="text-xs text-slate-400 mb-3">Envoie le template <code className="bg-slate-100 px-1 rounded">hello_world</code> (requis par Meta pour initier une conversation).</p>
+              <div className="flex gap-3">
+                <input value={testPhone} onChange={e => setTestPhone(e.target.value)} placeholder="+33612345678" className="flex-1 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400" />
+                <button onClick={sendTestWhatsapp} disabled={sendingWa || !testPhone.trim()} className="px-5 py-2.5 bg-green-600 text-white rounded-xl text-sm font-medium hover:bg-green-500 disabled:opacity-50">{sendingWa ? "Envoi..." : "Envoyer"}</button>
+              </div>
+              {waTestResult && <div className={`rounded-xl p-3 text-sm mt-3 ${waTestResult.success ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"}`}>{waTestResult.success ? "✓ " : "✗ "}{waTestResult.message}</div>}
+            </div>
           </div>
         </div>
       )}
@@ -1864,10 +1887,16 @@ function AIAssistant() {
     setInput("");
     setLoading(true);
 
-    // Construit l'historique à partir du state courant (ignore le message d'accueil idx=0)
+    // Construit l'historique : skip welcome, filtre content vide,
+    // s'assure que le premier message est 'user' (Anthropic l'exige)
     let payloadMessages = [];
     setMessages(prev => {
-      const history = prev.slice(1).map(m => ({ role: m.role, content: m.content }));
+      const history = prev
+        .slice(1)
+        .filter(m => m.content && m.content.trim())
+        .map(m => ({ role: m.role, content: m.content }));
+      // Drop les messages de tête tant que ce n'est pas 'user'
+      while (history.length && history[0].role !== "user") history.shift();
       payloadMessages = [...history, { role: "user", content: userMsg }];
       return [...prev, { role: "user", content: userMsg }];
     });
