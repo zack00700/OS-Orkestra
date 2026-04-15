@@ -1887,19 +1887,16 @@ function AIAssistant() {
     setInput("");
     setLoading(true);
 
-    // Construit l'historique : skip welcome, filtre content vide,
-    // s'assure que le premier message est 'user' (Anthropic l'exige)
-    let payloadMessages = [];
-    setMessages(prev => {
-      const history = prev
-        .slice(1)
-        .filter(m => m.content && m.content.trim())
-        .map(m => ({ role: m.role, content: m.content }));
-      // Drop les messages de tête tant que ce n'est pas 'user'
-      while (history.length && history[0].role !== "user") history.shift();
-      payloadMessages = [...history, { role: "user", content: userMsg }];
-      return [...prev, { role: "user", content: userMsg }];
-    });
+    // Construit l'historique AVANT setMessages (callback async, non fiable au moment du fetch).
+    // Skip welcome (idx 0), filtre content vide, premier message = 'user' (Anthropic l'exige).
+    const history = messages
+      .slice(1)
+      .filter(m => m.content && m.content.trim())
+      .map(m => ({ role: m.role, content: m.content }));
+    while (history.length && history[0].role !== "user") history.shift();
+    const payloadMessages = [...history, { role: "user", content: userMsg }];
+
+    setMessages(prev => [...prev, { role: "user", content: userMsg }]);
 
     try {
       const data = await api("/ai/chat", {
